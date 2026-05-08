@@ -12,6 +12,7 @@ from fastmcp import Context
 
 from zotero_mcp._app import mcp
 from zotero_mcp import client as _client
+from zotero_mcp.client import with_zotero_api_lock
 from zotero_mcp import utils as _utils
 from zotero_mcp.tools import _helpers
 
@@ -54,6 +55,7 @@ def _maybe_fire_presearch_sync(search) -> None:
     _threading.Thread(target=_run, daemon=True, name="zmcp-presearch-sync").start()
 
 
+@with_zotero_api_lock
 def _search_with_variants(zot, query: str, qmode: str, limit: int,
                           item_type: str = "-attachment",
                           tag: list[str] | None = None,
@@ -109,6 +111,7 @@ def _search_with_variants(zot, query: str, qmode: str, limit: int,
     name="zotero_search_items",
     description="Search for items in your Zotero library, given a query string. Returns metadata and abstracts. IMPORTANT: Use short, simple queries — 'Author Year' (e.g., 'Brewer 2011') or just the author name (e.g., 'Cladder-Micus'). Do NOT add extra keywords like topic words — this is substring matching, not web search. More words make the search STRICTER, not broader. If no results are found, the tool will automatically retry with simplified queries and semantic search. Optionally scope to a specific collection with collection_key."
 )
+@with_zotero_api_lock
 def search_items(
     query: str,
     qmode: Literal["titleCreatorYear", "everything"] = "titleCreatorYear",
@@ -311,6 +314,7 @@ def search_items(
     description="Search for items in your Zotero library by tag, optionally scoped to a collection. "
     "Conditions are ANDed, each term supports disjunction (`OR`) and exclusion (`-`)."
 )
+@with_zotero_api_lock
 def search_by_tag(
     tag: list[str],
     item_type: str = "-attachment",
@@ -388,6 +392,7 @@ def search_by_tag(
     description="Look up a Zotero item by its BetterBibTeX citation key (e.g., 'Smith2024'). "
     "Works in local mode via the BetterBibTeX API, or in web mode by searching the Extra field."
 )
+@with_zotero_api_lock
 def search_by_citation_key(
     citekey: str,
     *,
@@ -454,6 +459,7 @@ def search_by_citation_key(
     name="zotero_advanced_search",
     description="Perform an advanced search with multiple criteria."
 )
+@with_zotero_api_lock
 def advanced_search(
     conditions: list[dict[str, str]],
     join_mode: Literal["all", "any"] = "all",
@@ -704,6 +710,7 @@ def advanced_search(
     name="zotero_semantic_search",
     description="Prioritized search tool. Perform semantic search over your Zotero library using AI-powered embeddings. BEST TOOL for finding papers on a specific topic — much more efficient than scanning collection items or reading abstracts. Works across your entire library."
 )
+@with_zotero_api_lock
 def semantic_search(
     query: str,
     limit: int = 10,
@@ -825,6 +832,7 @@ def semantic_search(
         "user has added items directly in Zotero since the last update."
     )
 )
+@with_zotero_api_lock
 def update_search_database(
     force_rebuild: bool = False,
     limit: int | None = None,
@@ -898,6 +906,7 @@ def update_search_database(
     name="zotero_get_search_database_status",
     description="Get status information about the semantic search database."
 )
+@with_zotero_api_lock
 def get_search_database_status(*, ctx: Context) -> str:
     """
     Get semantic search database status.
