@@ -103,6 +103,7 @@ from zotero_mcp.tools.write import (  # noqa: F401
     add_by_url,
     add_by_isbn,
     update_item,
+    delete_item,
     find_duplicates,
     merge_duplicates,
     get_pdf_outline,
