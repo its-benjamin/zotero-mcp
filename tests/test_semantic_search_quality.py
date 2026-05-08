@@ -339,6 +339,65 @@ class TestGeminiV2Support:
         assert ef_v1.max_input_tokens == 2000
 
 
+class TestVoyageEmbedding:
+    def test_voyage_call_uses_document_input_type_and_preserves_order(self, monkeypatch):
+        from zotero_mcp.chroma_client import VoyageEmbeddingFunction
+
+        calls = []
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "data": [
+                        {"index": 1, "embedding": [2.0]},
+                        {"index": 0, "embedding": [1.0]},
+                    ]
+                }
+
+        def fake_post(provider, url, **kwargs):
+            calls.append((provider, url, kwargs))
+            return Response()
+
+        monkeypatch.setattr("zotero_mcp.chroma_client.rate_limited_post", fake_post)
+
+        ef = VoyageEmbeddingFunction(model_name="voyage-3.5", api_key="test-key")
+        result = ef(["doc one", "doc two"])
+
+        assert result == [[1.0], [2.0]]
+        provider, url, kwargs = calls[0]
+        assert provider == "voyage"
+        assert url == "https://api.voyageai.com/v1/embeddings"
+        assert kwargs["json"]["input_type"] == "document"
+        assert kwargs["json"]["model"] == "voyage-3.5"
+
+    def test_voyage_embed_query_uses_query_input_type(self, monkeypatch):
+        from zotero_mcp.chroma_client import VoyageEmbeddingFunction
+
+        captured = {}
+
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"data": [{"index": 0, "embedding": [0.1, 0.2]}]}
+
+        def fake_post(provider, url, **kwargs):
+            captured.update(kwargs["json"])
+            return Response()
+
+        monkeypatch.setattr("zotero_mcp.chroma_client.rate_limited_post", fake_post)
+
+        ef = VoyageEmbeddingFunction(model_name="voyage-3.5", api_key="test-key")
+        result = ef.embed_query("search text")
+
+        assert result == [0.1, 0.2]
+        assert captured["input_type"] == "query"
+
+
 class TestSearchUsesEmbedQuery:
     def test_search_uses_query_embeddings_for_custom_ef(self):
         """ChromaClient.search should use query_embeddings for custom embedding functions."""

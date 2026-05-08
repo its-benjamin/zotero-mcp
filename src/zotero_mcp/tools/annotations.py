@@ -7,11 +7,12 @@ import uuid
 
 import requests
 
-from zotero_mcp._context import Context
-from zotero_mcp._app import mcp
 from zotero_mcp import client as _client
-from zotero_mcp.client import with_zotero_api_lock
 from zotero_mcp import utils as _utils
+from zotero_mcp._app import mcp
+from zotero_mcp._context import Context
+from zotero_mcp.client import with_zotero_api_lock
+from zotero_mcp.rate_limiter import rate_limit
 from zotero_mcp.tools import _helpers
 
 _WEB_API_ENV_VARS = (
@@ -1081,6 +1082,7 @@ def delete_note(
             zot.endpoint,
             f"/{zot.library_type}/{zot.library_id}/items/{item_key}",
         )
+        rate_limit("zotero")
         resp = zot.client.patch(
             url=url,
             headers={"If-Unmodified-Since-Version": str(item["version"])},

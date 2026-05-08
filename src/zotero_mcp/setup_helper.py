@@ -157,12 +157,13 @@ def setup_semantic_search(existing_semantic_config: dict | None = None, semantic
     print("1. Default (all-MiniLM-L6-v2) - Free, runs locally")
     print("2. OpenAI - Better quality, requires API key")
     print("3. Gemini - Better quality, requires API key")
+    print("4. Voyage AI - Better retrieval quality, requires API key")
 
     while True:
-        choice = input("\nChoose embedding model (1-3): ").strip()
-        if choice in ["1", "2", "3"]:
+        choice = input("\nChoose embedding model (1-4): ").strip()
+        if choice in ["1", "2", "3", "4"]:
             break
-        print("Please enter 1, 2, or 3")
+        print("Please enter 1, 2, 3, or 4")
 
     config = {}
 
@@ -223,6 +224,24 @@ def setup_semantic_search(existing_semantic_config: dict | None = None, semantic
             print(f"Using custom Gemini base URL: {base_url}")
         else:
             print("Using default Gemini base URL")
+
+    elif choice == "4":
+        config["embedding_model"] = "voyage"
+
+        config["embedding_config"] = {"model_name": "voyage-3.5"}
+
+        api_key = getpass.getpass("Enter your Voyage API key (hidden): ").strip()
+        if api_key:
+            config["embedding_config"]["api_key"] = api_key
+        else:
+            print("Warning: No API key provided. Set VOYAGE_API_KEY environment variable.")
+
+        base_url = input("Enter custom Voyage base URL (leave blank for default): ").strip()
+        if base_url:
+            config["embedding_config"]["base_url"] = base_url
+            print(f"Using custom Voyage base URL: {base_url}")
+        else:
+            print("Using default Voyage base URL")
 
     # Configure update frequency
     print("\n=== Database Update Configuration ===")
@@ -442,6 +461,14 @@ def update_claude_config(config_path, zotero_mcp_path, local=True, api_key=None,
                 env_settings["GEMINI_EMBEDDING_MODEL"] = model
             if base_url := embedding_config.get("base_url"):
                 env_settings["GEMINI_BASE_URL"] = base_url
+
+        elif semantic_config.get("embedding_model") == "voyage":
+            if api_key := embedding_config.get("api_key"):
+                env_settings["VOYAGE_API_KEY"] = api_key
+            if model := embedding_config.get("model_name"):
+                env_settings["VOYAGE_EMBEDDING_MODEL"] = model
+            if base_url := embedding_config.get("base_url"):
+                env_settings["VOYAGE_BASE_URL"] = base_url
 
     # Add or update zotero config
     config["mcpServers"]["zotero"] = {

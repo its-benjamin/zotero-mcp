@@ -16,6 +16,8 @@ import logging
 
 import requests
 
+from zotero_mcp.rate_limiter import rate_limited_get, rate_limited_post
+
 logger = logging.getLogger(__name__)
 
 _BASE = "https://api.scite.ai"
@@ -36,7 +38,8 @@ def get_tally(doi: str) -> dict | None:
     ``citingPublications``.  Returns ``None`` on any failure.
     """
     try:
-        resp = requests.get(
+        resp = rate_limited_get(
+            "scite",
             f"{_BASE}/tallies/{doi}",
             headers=_HEADERS,
             timeout=_TIMEOUT,
@@ -57,7 +60,8 @@ def get_tallies_batch(dois: list[str]) -> dict[str, dict]:
     if not dois:
         return {}
     try:
-        resp = requests.post(
+        resp = rate_limited_post(
+            "scite",
             f"{_BASE}/tallies",
             json=dois[:500],
             headers=_HEADERS,
@@ -82,7 +86,8 @@ def get_paper(doi: str) -> dict | None:
     Returns the full paper dict or ``None`` on failure.
     """
     try:
-        resp = requests.get(
+        resp = rate_limited_get(
+            "scite",
             f"{_BASE}/papers/{doi}",
             headers=_HEADERS,
             timeout=_TIMEOUT,
@@ -103,7 +108,8 @@ def get_papers_batch(dois: list[str]) -> dict[str, dict]:
     if not dois:
         return {}
     try:
-        resp = requests.post(
+        resp = rate_limited_post(
+            "scite",
             f"{_BASE}/papers",
             json={"dois": dois[:500]},
             headers=_HEADERS,

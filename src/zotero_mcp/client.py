@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from markitdown import MarkItDown
 from pyzotero import zotero
 
+from zotero_mcp.rate_limiter import RateLimitedZotero
 from zotero_mcp.utils import format_creators
 
 # Load environment variables
@@ -98,12 +99,13 @@ def get_zotero_client() -> zotero.Zotero:
             "or use ZOTERO_LOCAL=true for local Zotero instance."
         )
 
-    return zotero.Zotero(
+    client = zotero.Zotero(
         library_id=library_id,
         library_type=library_type,
         api_key=api_key,
         local=local,
     )
+    return RateLimitedZotero(client, enabled=not local)
 
 
 def get_local_zotero_client() -> zotero.Zotero | None:
@@ -149,12 +151,13 @@ def get_web_zotero_client() -> zotero.Zotero | None:
     if not library_id or not api_key:
         return None
 
-    return zotero.Zotero(
+    client = zotero.Zotero(
         library_id=library_id,
         library_type=library_type,
         api_key=api_key,
         local=False,
     )
+    return RateLimitedZotero(client)
 
 
 def is_local_zotero_available() -> bool:

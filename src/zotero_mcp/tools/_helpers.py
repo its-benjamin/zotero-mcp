@@ -6,11 +6,9 @@ import re
 import tempfile
 from pathlib import Path
 
-import requests
-
 from zotero_mcp import client as _client
 from zotero_mcp import utils as _utils
-
+from zotero_mcp.rate_limiter import rate_limited_get
 
 # ---------------------------------------------------------------------------
 # Config file
@@ -240,7 +238,7 @@ def _normalize_arxiv_id(raw):
 def _download_and_attach_pdf(write_zot, item_key, pdf_url, doi, ctx):
     """Download a PDF from a URL and attach it to a Zotero item."""
     try:
-        pdf_resp = requests.get(pdf_url, timeout=30, stream=True)
+        pdf_resp = rate_limited_get("unpaywall", pdf_url, timeout=30, stream=True)
         pdf_resp.raise_for_status()
 
         content_type = pdf_resp.headers.get("Content-Type", "")
@@ -290,7 +288,8 @@ def _attach_pdf_linked_url(write_zot, pdf_url, parent_key, ctx):
 def _try_unpaywall(doi, ctx):
     """Try Unpaywall API for open-access PDF URLs."""
     try:
-        resp = requests.get(
+        resp = rate_limited_get(
+            "unpaywall",
             f"https://api.unpaywall.org/v2/{doi}",
             params={"email": "zotero-mcp@users.noreply.github.com"},
             timeout=10,
@@ -365,7 +364,8 @@ def _try_arxiv_from_crossref(crossref_metadata, ctx):
 def _try_semantic_scholar(doi, ctx):
     """Try Semantic Scholar API for an open-access PDF URL."""
     try:
-        resp = requests.get(
+        resp = rate_limited_get(
+            "semantic_scholar",
             f"https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}",
             params={"fields": "openAccessPdf"},
             timeout=10,
@@ -388,7 +388,8 @@ def _try_semantic_scholar(doi, ctx):
 def _try_pmc(doi, ctx):
     """Try PubMed Central for a free PDF via DOI-to-PMCID conversion."""
     try:
-        conv_resp = requests.get(
+        conv_resp = rate_limited_get(
+            "pmc",
             "https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/",
             params={"ids": doi, "format": "json", "tool": "zotero-mcp",
                     "email": "zotero-mcp@users.noreply.github.com"},

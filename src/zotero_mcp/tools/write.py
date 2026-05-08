@@ -1,21 +1,21 @@
 """Write / mutation tool functions for the Zotero MCP server."""
 
-from typing import Literal
 import json
 import os
 import re
 import tempfile
-import xml.etree.ElementTree as ET
-
 import time as _time
+from typing import Literal
+import xml.etree.ElementTree as ET
 
 import requests
 
-from zotero_mcp._context import Context
-from zotero_mcp._app import mcp
 from zotero_mcp import client as _client
-from zotero_mcp.client import with_zotero_api_lock
 from zotero_mcp import utils as _utils
+from zotero_mcp._app import mcp
+from zotero_mcp._context import Context
+from zotero_mcp.client import with_zotero_api_lock
+from zotero_mcp.rate_limiter import rate_limit, rate_limited_get
 from zotero_mcp.tools import _helpers
 
 # Accessed as _helpers.X so that monkeypatch/mock on the module attribute works.
@@ -415,7 +415,8 @@ def add_by_doi(
 
         ctx.info(f"Fetching metadata for DOI: {normalized}")
 
-        resp = requests.get(
+        resp = rate_limited_get(
+            "crossref",
             f"https://api.crossref.org/works/{normalized}",
             headers={
                 "User-Agent": "zotero-mcp/1.0 (https://github.com/ehawkin/zotero-mcp)",
@@ -613,7 +614,8 @@ def _add_by_arxiv(arxiv_id, collections, tags, write_zot, ctx):
 
     resp = None
     for attempt in range(3):
-        resp = requests.get(
+        resp = rate_limited_get(
+            "arxiv",
             f"https://export.arxiv.org/api/query?id_list={arxiv_id}",
             timeout=30,
         )
@@ -690,7 +692,7 @@ def _add_by_arxiv(arxiv_id, collections, tags, write_zot, ctx):
         pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
         pdf_status = "no PDF attached"
         try:
-            pdf_resp = requests.get(pdf_url, timeout=30, stream=True)
+            pdf_resp = rate_limited_get("arxiv", pdf_url, timeout=30, stream=True)
             pdf_resp.raise_for_status()
             with tempfile.TemporaryDirectory() as tmpdir:
                 filename = f"arxiv_{arxiv_id.replace('/', '_')}.pdf"
@@ -1200,6 +1202,7 @@ def merge_duplicates(
                     f"/{write_zot.library_type}/{write_zot.library_id}/items/{dup_key}",
                 )
                 headers = {"If-Unmodified-Since-Version": str(version)}
+                rate_limit("zotero")
                 resp = write_zot.client.patch(
                     url=url,
                     headers=headers,

@@ -29,7 +29,7 @@
 
 ### 🧠 AI-Powered Semantic Search
 - **Vector-based similarity search** over your entire research library (requires `[semantic]` extra)
-- **Multiple embedding models**: Default (free, local), OpenAI, and Gemini
+- **Multiple embedding models**: Default (free, local), OpenAI, Gemini, and Voyage AI
 - **Intelligent results** with similarity scores and contextual matching
 - **Auto-updating database** with configurable sync schedules
 
@@ -107,7 +107,7 @@ Heavy ML/PDF dependencies are separated into optional extras so the base install
 
 | Extra | What it adds | Install command |
 |-------|-------------|-----------------|
-| `semantic` | Semantic search via ChromaDB, sentence-transformers, OpenAI/Gemini embeddings | `pip install "zotero-mcp-server[semantic]"` |
+| `semantic` | Semantic search via ChromaDB, sentence-transformers, OpenAI/Gemini/Voyage embeddings | `pip install "zotero-mcp-server[semantic]"` |
 | `pdf` | PDF outline extraction (PyMuPDF) and EPUB annotation support | `pip install "zotero-mcp-server[pdf]"` |
 | `scite` | [Scite](https://scite.ai) citation intelligence — tallies and retraction alerts (no account needed) | `pip install "zotero-mcp-server[scite]"` |
 | `all` | Everything above | `pip install "zotero-mcp-server[all]"` |
@@ -152,6 +152,7 @@ zotero-mcp setup --semantic-config-only
 - **Default (all-MiniLM-L6-v2)**: Free, runs locally, good for most use cases
 - **OpenAI**: Better quality, requires API key (`text-embedding-3-small` or `text-embedding-3-large`)
 - **Gemini**: Better quality, requires API key (`gemini-embedding-001`)
+- **Voyage AI**: Better retrieval quality, requires API key (`voyage-3.5`)
 
 **Update Frequency Options:**
 - **Manual**: Update only when you run `zotero-mcp update-db`
@@ -288,14 +289,20 @@ zotero-mcp setup --no-local --api-key YOUR_API_KEY --library-id YOUR_LIBRARY_ID
 - `ZOTERO_LIBRARY_TYPE`: The type of library (user or group, default: user)
 
 **Semantic Search:**
-- `ZOTERO_EMBEDDING_MODEL`: Embedding model to use (default, openai, gemini)
+- `ZOTERO_EMBEDDING_MODEL`: Embedding model to use (default, openai, gemini, voyage)
 - `OPENAI_API_KEY`: Your OpenAI API key (for OpenAI embeddings)
 - `OPENAI_EMBEDDING_MODEL`: OpenAI model name (text-embedding-3-small, text-embedding-3-large)
 - `OPENAI_BASE_URL`: Custom OpenAI endpoint URL (optional, for use with compatible APIs)
 - `GEMINI_API_KEY`: Your Gemini API key (for Gemini embeddings)
 - `GEMINI_EMBEDDING_MODEL`: Gemini model name (gemini-embedding-001)
 - `GEMINI_BASE_URL`: Custom Gemini endpoint URL (optional, for use with compatible APIs)
+- `VOYAGE_API_KEY`: Your Voyage AI API key (for Voyage embeddings)
+- `VOYAGE_EMBEDDING_MODEL`: Voyage model name (default: voyage-3.5)
+- `VOYAGE_BASE_URL`: Custom Voyage endpoint URL (optional)
 - `ZOTERO_DB_PATH`: Custom `zotero.sqlite` path (optional)
+
+**API Rate Limits:**
+External API calls are throttled by provider instead of being fired in a burst. Defaults are conservative and can be overridden with `ZOTERO_MCP_RATE_<PROVIDER>_REQUESTS` and `ZOTERO_MCP_RATE_<PROVIDER>_WINDOW_SECONDS`, where provider is one of `ZOTERO`, `CROSSREF`, `ARXIV`, `UNPAYWALL`, `SEMANTIC_SCHOLAR`, `PMC`, `SCITE`, `OPENAI`, `GEMINI`, or `VOYAGE`.
 
 ### Command-Line Options
 
@@ -474,7 +481,7 @@ A 45-point live integration test plan is included at `docs/integration-test-plan
 - **Database update takes long**: By default, `update-db` is fast (metadata-only). For comprehensive indexing with full-text, use `--fulltext` flag. Use `--limit` parameter for testing: `zotero-mcp update-db --limit 100`
 - **Semantic search returns no results**: Ensure the database is initialized with `zotero-mcp update-db` and check status with `zotero-mcp db-status`
 - **Limited search quality**: For better semantic search results, use `zotero-mcp update-db --fulltext` to index full-text content (requires local Zotero setup)
-- **OpenAI/Gemini API errors**: Verify your API keys are correctly set and have sufficient credits/quota
+- **OpenAI/Gemini/Voyage API errors**: Verify your API keys are correctly set and have sufficient credits/quota
 
 ### Update Issues
 - **Update command fails**: Check your internet connection and try `zotero-mcp update --force`
