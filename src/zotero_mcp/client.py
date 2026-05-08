@@ -290,7 +290,9 @@ def generate_bibtex(item: dict[str, Any]) -> str:
         bibtex = ZoteroBetterBibTexAPI()
 
         if bibtex.is_zotero_running():
-            return bibtex.export_bibtex(item_key)
+            exported = bibtex.export_bibtex(item_key)
+            if exported:
+                return exported
 
     except Exception:
         # Continue to fallback method if Better BibTeX fails

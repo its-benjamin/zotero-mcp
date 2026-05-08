@@ -241,8 +241,10 @@ class LocalZoteroReader:
                 return None
             return Path(decoded_path)
 
-        # Linked file as absolute path: '/Users/me/papers/file.pdf'
-        if os.path.isabs(zotero_path):
+        # Linked file as absolute path. On Windows, os.path.isabs() does not
+        # recognize POSIX-style paths like '/Users/me/papers/file.pdf', but
+        # Zotero databases can contain them.
+        if os.path.isabs(zotero_path) or zotero_path.startswith("/"):
             return Path(zotero_path)
 
         # Zotero 'attachments:' relative path — resolve against the linked
