@@ -23,8 +23,9 @@ load_dotenv()
 # concurrent requests from parallel MCP tool threads queue at the network layer and
 # risk hitting pyzotero's 30s timeout. A process-local semaphore ensures only one
 # request is in-flight at a time — the rest queue in-process (microseconds) instead
-# of at the API (seconds/timeout).
-_zotero_api_lock = threading.Semaphore(1)
+# of at the API (seconds/timeout). Use an RLock because top-level tools can call
+# decorated helper functions in the same thread.
+_zotero_api_lock = threading.RLock()
 
 
 def with_zotero_api_lock(func):
