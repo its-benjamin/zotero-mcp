@@ -2,6 +2,7 @@
 
 import json
 import os
+import posixpath
 import re
 import tempfile
 import time as _time
@@ -1791,8 +1792,13 @@ def add_from_file(
             return "Error: Symlinks are not allowed for security reasons."
         if not os.path.isabs(file_path):
             return "Error: file_path must be an absolute path."
-        # Resolve ".." components after symlink check
-        file_path = os.path.realpath(file_path)
+        # Resolve ".." components after symlink check. On Windows, realpath()
+        # rewrites POSIX-style absolute paths like /Users/me/file.pdf into
+        # C:\Users\..., so preserve that valid Zotero/test shape.
+        if os.name == "nt" and file_path.startswith("/") and not file_path.startswith("//"):
+            file_path = posixpath.normpath(file_path)
+        else:
+            file_path = os.path.realpath(file_path)
         if not os.path.isfile(file_path):
             return f"Error: File not found: {file_path}"
 

@@ -27,6 +27,7 @@ class FakeZotero:
 def test_create_note_includes_title_heading(monkeypatch):
     fake_zot = FakeZotero()
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake_zot)
+    monkeypatch.setattr("zotero_mcp.tools.annotations._utils.is_local_mode", lambda: False)
 
     result = server.create_note(
         item_key="ITEM0001",
