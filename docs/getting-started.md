@@ -4,10 +4,10 @@ This guide will walk you through the setup and basic usage of the Zotero MCP ser
 
 ## Installation
 
-First, install the Zotero MCP server using pip:
+First, install this GitHub-only fork using pip:
 
 ```bash
-pip install zotero-mcp-server
+pip install "zotero-mcp-server @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1"
 ```
 
 ## Configuration
@@ -228,4 +228,4 @@ zotero-mcp update-db --force-rebuild
 
 Other than time waiting for the rebuild, there is generally little to no risk involved in triggering the rebuild - so if you're experiencing database-related issues, it's worth trying this command.
 
-For more help, try the [discussions](https://github.com/54yyyu/zotero-mcp/discussions).
+For more help, use this fork's [issues](https://github.com/its-benjamin/zotero-mcp/issues).

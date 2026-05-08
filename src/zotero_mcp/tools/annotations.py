@@ -1105,7 +1105,7 @@ def delete_note(
         "page (integer, 1-indexed — page 1 is the first page), "
         "text (exact text to highlight), color (hex, default yellow #ffd400), "
         "comment (optional note on the highlight). "
-        "Requires PyMuPDF: pip install zotero-mcp-server[pdf]"
+        "Requires PyMuPDF: pip install \"zotero-mcp-server[pdf] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1\""
     )
 )
 @with_zotero_api_lock

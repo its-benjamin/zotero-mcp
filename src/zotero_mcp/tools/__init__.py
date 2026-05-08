@@ -8,7 +8,7 @@ from zotero_mcp.tools import (  # noqa: F401
     write,
 )
 
-# Optional: Scite enrichment (requires ``pip install zotero-mcp-server[scite]``)
+# Optional: Scite enrichment (requires installing this fork with the scite extra).
 try:
     from zotero_mcp.tools import scite as scite  # noqa: F401
 except ImportError:

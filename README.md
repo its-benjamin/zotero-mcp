@@ -13,8 +13,8 @@
   <a href="https://modelcontextprotocol.io/introduction">
     <img src="https://img.shields.io/badge/MCP-0175C2?style=for-the-badge&logoColor=white" alt="MCP">
   </a>
-  <a href="https://pypi.org/project/zotero-mcp-server/">
-    <img src="https://img.shields.io/pypi/v/zotero-mcp-server?style=for-the-badge&logo=pypi&logoColor=white" alt="PyPI">
+  <a href="https://github.com/its-benjamin/zotero-mcp/releases">
+    <img src="https://img.shields.io/github/v/release/its-benjamin/zotero-mcp?style=for-the-badge&logo=github" alt="GitHub release">
   </a>
   <a href="https://discord.gg/BvgjbcBUqg">
     <img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord">
@@ -22,6 +22,8 @@
 </p>
 
 **Zotero MCP** seamlessly connects your [Zotero](https://www.zotero.org/) research library with [ChatGPT](https://openai.com), [Claude](https://www.anthropic.com/claude), and other AI assistants (e.g., [Cherry Studio](https://cherry-ai.com/), [Chorus](https://chorus.sh), [Cursor](https://www.cursor.com/)) via the [Model Context Protocol](https://modelcontextprotocol.io/introduction). Review papers, get summaries, analyze citations, extract PDF annotations, and more!
+
+This fork is released from GitHub only. It is not published to PyPI; install it from this repository or a release tag.
 
 ---
 
@@ -80,24 +82,24 @@
 
 The base install is lightweight — it includes search, metadata retrieval, annotations, and write operations. No ML/AI dependencies are pulled in.
 
-#### Installing via uv (recommended)
+#### Installing from GitHub via uv (recommended)
 
 ```bash
-uv tool install zotero-mcp-server
+uv tool install git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1
 zotero-mcp setup  # Auto-configure (Claude Desktop supported)
 ```
 
-#### Installing via pip
+#### Installing from GitHub via pip
 
 ```bash
-pip install zotero-mcp-server
+pip install "zotero-mcp-server @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1"
 zotero-mcp setup  # Auto-configure (Claude Desktop supported)
 ```
 
-#### Installing via pipx
+#### Installing from GitHub via pipx
 
 ```bash
-pipx install zotero-mcp-server
+pipx install git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1
 zotero-mcp setup  # Auto-configure (Claude Desktop supported)
 ```
 
@@ -107,15 +109,14 @@ Heavy ML/PDF dependencies are separated into optional extras so the base install
 
 | Extra | What it adds | Install command |
 |-------|-------------|-----------------|
-| `semantic` | Semantic search via ChromaDB, sentence-transformers, OpenAI/Gemini/Voyage embeddings | `pip install "zotero-mcp-server[semantic]"` |
-| `pdf` | PDF outline extraction (PyMuPDF) and EPUB annotation support | `pip install "zotero-mcp-server[pdf]"` |
-| `scite` | [Scite](https://scite.ai) citation intelligence — tallies and retraction alerts (no account needed) | `pip install "zotero-mcp-server[scite]"` |
-| `all` | Everything above | `pip install "zotero-mcp-server[all]"` |
+| `semantic` | Semantic search via ChromaDB, sentence-transformers, OpenAI/Gemini/Voyage embeddings | `pip install "zotero-mcp-server[semantic] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1"` |
+| `pdf` | PDF outline extraction (PyMuPDF) and EPUB annotation support | `pip install "zotero-mcp-server[pdf] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1"` |
+| `scite` | [Scite](https://scite.ai) citation intelligence — tallies and retraction alerts (no account needed) | `pip install "zotero-mcp-server[scite] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1"` |
+| `all` | Everything above | `pip install "zotero-mcp-server[all] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1"` |
 
 For example, with uv:
 ```bash
-uv tool install "zotero-mcp-server[all]"    # Full install with all features
-uv tool install "zotero-mcp-server[semantic]" # Just semantic search
+uv tool install "zotero-mcp-server[all] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1"
 ```
 
 If you only need basic library access (search, read, annotate, write), the default install with no extras is all you need.
@@ -192,7 +193,7 @@ The semantic search provides similarity scores and finds papers based on concept
 
 ## 🖥️ Setup & Usage
 
-Full documentation is available at [Zotero MCP docs](https://stevenyuyy.com/zotero-mcp/).
+Full documentation for this fork is available in this README and [Getting Started guide](./docs/getting-started.md).
 
 **Requirements**
 - Python 3.10+
@@ -486,14 +487,6 @@ A 45-point live integration test plan is included at `docs/integration-test-plan
 ### Update Issues
 - **Update command fails**: Check your internet connection and try `zotero-mcp update --force`
 - **Configuration lost after update**: The update process preserves configs automatically, but check `~/.config/zotero-mcp/` for backup files
-
-## ☕ Support
-
-If you find Zotero MCP useful, consider buying me a coffee!
-
-<a href="https://buymeacoffee.com/stevenyuyy">
-  <img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee">
-</a>
 
 ## 📄 License
 

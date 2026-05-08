@@ -785,7 +785,7 @@ def _lookup_isbn_openlibrary(isbn, ctx):
         )
         resp = requests.get(
             url,
-            headers={"User-Agent": "zotero-mcp/1.0 (https://github.com/54yyyu/zotero-mcp)"},
+            headers={"User-Agent": "zotero-mcp/1.0 (https://github.com/its-benjamin/zotero-mcp)"},
             timeout=15,
         )
         if resp.status_code != 200:
@@ -849,7 +849,7 @@ def _lookup_isbn_google_books(isbn, ctx):
         url = f"https://www.googleapis.com/books/v1/volumes?q=isbn:{isbn}"
         resp = requests.get(
             url,
-            headers={"User-Agent": "zotero-mcp/1.0 (https://github.com/54yyyu/zotero-mcp)"},
+            headers={"User-Agent": "zotero-mcp/1.0 (https://github.com/its-benjamin/zotero-mcp)"},
             timeout=15,
         )
         if resp.status_code != 200:
@@ -1687,7 +1687,7 @@ def merge_duplicates(
         "are accepted; attachment-to-parent resolution is automatic. "
         "Find the right key with zotero_get_item_children if unsure. "
         "Scope: PDFs only (EPUBs have no outline extraction here). "
-        "Requires PyMuPDF (pip install zotero-mcp-server[pdf]). "
+        "Requires PyMuPDF. Install this fork with the pdf extra from GitHub. "
         "Read-only; works in local or web mode. "
         "Example: zotero_get_pdf_outline(item_key='RTKZQI8E')."
     )

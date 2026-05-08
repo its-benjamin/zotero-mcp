@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "zotero-mcp-server"
 dynamic = ["version"]
 authors = [
-  { name = "54yyyu", email = "54yyyu@github.com" },
+  { name = "its-benjamin", email = "its-benjamin@users.noreply.github.com" },
 ]
 description = "A Model Context Protocol server for Zotero"
 keywords = ["zotero", "mcp", "model-context-protocol", "cli", "research", "citations", "bibliography"]
@@ -55,10 +55,10 @@ dev = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/54yyyu/zotero-mcp"
-"Bug Tracker" = "https://github.com/54yyyu/zotero-mcp/issues"
-"Documentation" = "https://stevenyuyy.com/zotero-mcp/"
-"Changelog" = "https://github.com/54yyyu/zotero-mcp/blob/main/CHANGELOG.md"
+"Homepage" = "https://github.com/its-benjamin/zotero-mcp"
+"Bug Tracker" = "https://github.com/its-benjamin/zotero-mcp/issues"
+"Documentation" = "https://github.com/its-benjamin/zotero-mcp#readme"
+"Changelog" = "https://github.com/its-benjamin/zotero-mcp/releases"
 
 [project.scripts]
 zotero-cli = "zotero_mcp.cli_standalone:main"

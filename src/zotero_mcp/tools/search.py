@@ -771,7 +771,7 @@ def semantic_search(
         except ImportError:
             return (
                 "Semantic search is not available. Install the required packages with:\n"
-                "  pip install zotero-mcp-server[semantic]\n\n"
+                "  pip install \"zotero-mcp-server[semantic] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1\"\n\n"
                 "This installs chromadb, sentence-transformers, and related dependencies."
             )
 
@@ -865,7 +865,7 @@ def update_search_database(
         except ImportError:
             return (
                 "Semantic search is not available. Install the required packages with:\n"
-                "  pip install zotero-mcp-server[semantic]\n\n"
+                "  pip install \"zotero-mcp-server[semantic] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1\"\n\n"
                 "This installs chromadb, sentence-transformers, and related dependencies."
             )
 
@@ -932,7 +932,7 @@ def get_search_database_status(*, ctx: Context) -> str:
         except ImportError:
             return (
                 "Semantic search is not available. Install the required packages with:\n"
-                "  pip install zotero-mcp-server[semantic]\n\n"
+                "  pip install \"zotero-mcp-server[semantic] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1\"\n\n"
                 "This installs chromadb, sentence-transformers, and related dependencies."
             )
 

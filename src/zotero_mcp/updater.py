@@ -22,6 +22,22 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+GITHUB_REPO = "its-benjamin/zotero-mcp"
+GITHUB_URL = f"https://github.com/{GITHUB_REPO}.git"
+PACKAGE_NAME = "zotero-mcp-server"
+
+
+def _github_install_spec(version: str | None = None) -> str:
+    """Return a pip-compatible direct-reference spec for this GitHub-only fork."""
+    ref = f"@v{version}" if version else ""
+    return f"{PACKAGE_NAME} @ git+{GITHUB_URL}{ref}"
+
+
+def _github_url_spec(version: str | None = None) -> str:
+    """Return a bare VCS URL for tools that do not accept PEP 508 specs."""
+    ref = f"@v{version}" if version else ""
+    return f"git+{GITHUB_URL}{ref}"
+
 
 def _is_uv_tool_installation() -> bool:
     """Check if zotero-mcp is currently installed as a uv tool."""
@@ -145,27 +161,14 @@ def get_current_version() -> str | None:
 
 
 def get_latest_version() -> str | None:
-    """Get the latest version from PyPI (with GitHub releases as fallback)."""
+    """Get the latest version from this fork's GitHub releases/tags."""
     if not requests:
         logger.warning("requests library not available, cannot check for updates")
         return None
 
-    # Try PyPI first
     try:
         response = requests.get(
-            "https://pypi.org/pypi/zotero-mcp-server/json",
-            timeout=10
-        )
-        if response.status_code == 200:
-            data = response.json()
-            return data.get("info", {}).get("version")
-    except Exception as e:
-        logger.warning(f"Could not fetch latest version from PyPI: {e}")
-
-    # Fallback to GitHub releases
-    try:
-        response = requests.get(
-            "https://api.github.com/repos/54yyyu/zotero-mcp/releases/latest",
+            f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
             timeout=10
         )
         if response.status_code == 200:
@@ -174,6 +177,18 @@ def get_latest_version() -> str | None:
             return tag_name.lstrip("v")
     except Exception as e:
         logger.warning(f"Could not fetch latest version from GitHub: {e}")
+
+    try:
+        response = requests.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}/tags",
+            timeout=10,
+        )
+        if response.status_code == 200:
+            tags = response.json()
+            if tags:
+                return str(tags[0].get("name", "")).lstrip("v")
+    except Exception as e:
+        logger.warning(f"Could not fetch latest tag from GitHub: {e}")
 
     return None
 
@@ -296,22 +311,24 @@ def update_via_method(method: str, force: bool = False) -> tuple[bool, str]:
     Returns:
         Tuple of (success, message)
     """
-    package_name = "zotero-mcp-server"
+    latest_version = get_latest_version()
+    package_name = _github_install_spec(latest_version)
+    url_package = _github_url_spec(latest_version)
 
     try:
         if method == "uv":
             if _is_uv_tool_installation():
                 upgrade_result = subprocess.run(
-                    ["uv", "tool", "upgrade", "zotero-mcp-server"],
+                    ["uv", "tool", "install", "--force", url_package],
                     capture_output=True,
                     text=True,
                     timeout=300,
                 )
                 if upgrade_result.returncode == 0:
-                    return True, "Updated successfully via uv tool"
+                    return True, "Updated successfully from GitHub via uv tool"
 
                 # Fall back to a force reinstall for uv tool installs.
-                cmd = ["uv", "tool", "install", "--force", package_name]
+                cmd = ["uv", "tool", "install", "--force", url_package]
             else:
                 cmd = ["uv", "pip", "install", "--upgrade", package_name]
         elif method == "pip":
@@ -323,18 +340,18 @@ def update_via_method(method: str, force: bool = False) -> tuple[bool, str]:
             # First try to upgrade, if that fails, reinstall
             try:
                 result = subprocess.run(
-                    ["pipx", "upgrade", "zotero-mcp-server"],
+                    ["pipx", "install", "--force", url_package],
                     capture_output=True,
                     text=True,
                     timeout=300
                 )
                 if result.returncode == 0:
-                    return True, "Updated successfully via pipx"
+                    return True, "Updated successfully from GitHub via pipx"
             except Exception:
                 pass
 
             # Fall back to reinstall
-            cmd = ["pipx", "install", "--force", package_name]
+            cmd = ["pipx", "install", "--force", url_package]
         else:
             return False, f"Unknown installation method: {method}"
 
