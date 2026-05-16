@@ -1,12 +1,4 @@
-import sys
-
 import pytest
-
-if sys.version_info >= (3, 14):
-    pytest.skip(
-        "chromadb currently relies on pydantic v1 paths that are incompatible with Python 3.14+",
-        allow_module_level=True,
-    )
 
 from zotero_mcp import semantic_search
 
