@@ -155,4 +155,3 @@ def test_create_area_annotation_requires_web_api(monkeypatch):
     )
 
     assert "Web API credentials required for creating annotations" in result
-

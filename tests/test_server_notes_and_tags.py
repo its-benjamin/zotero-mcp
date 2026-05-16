@@ -131,8 +131,6 @@ def test_search_notes_note_results_survive_annotation_crash(monkeypatch):
         "ITEM0001": {"data": {"title": "Mindfulness Paper"}},
     }
 
-    call_count = [0]
-
     class CrashingAnnotationZot(FakeZoteroForNotes):
         def items(self, **kwargs):
             item_type = kwargs.get("itemType") or self.params.get("itemType")
@@ -249,9 +247,7 @@ def test_search_notes_raw_html_preserves_tags(monkeypatch):
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
     monkeypatch.setattr("zotero_mcp.utils.is_local_mode", lambda: False)
 
-    result = server.search_notes(
-        query="quantum", limit=20, raw_html=True, ctx=DummyContext()
-    )
+    result = server.search_notes(query="quantum", limit=20, raw_html=True, ctx=DummyContext())
 
     assert "<em>quantum</em>" in result
     # Query matching uses stripped text, so this note is still found.
@@ -263,9 +259,7 @@ def test_update_note_replaces_content(monkeypatch):
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
     monkeypatch.setattr("zotero_mcp.utils.is_local_mode", lambda: False)
 
-    result = server.update_note(
-        item_key="NOTE0001", note_text="<p>new</p>", append=False, ctx=DummyContext()
-    )
+    result = server.update_note(item_key="NOTE0001", note_text="<p>new</p>", append=False, ctx=DummyContext())
 
     assert "Successfully updated" in result
     assert fake.updated[0]["data"]["note"] == "<p>new</p>"
@@ -276,9 +270,7 @@ def test_update_note_appends_content(monkeypatch):
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
     monkeypatch.setattr("zotero_mcp.utils.is_local_mode", lambda: False)
 
-    result = server.update_note(
-        item_key="NOTE0001", note_text="<p>more</p>", append=True, ctx=DummyContext()
-    )
+    result = server.update_note(item_key="NOTE0001", note_text="<p>more</p>", append=True, ctx=DummyContext())
 
     assert "Successfully updated" in result
     assert fake.updated[0]["data"]["note"] == "<p>old</p><p>more</p>"
@@ -293,9 +285,7 @@ def test_update_note_rejects_non_note(monkeypatch):
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
     monkeypatch.setattr("zotero_mcp.utils.is_local_mode", lambda: False)
 
-    result = server.update_note(
-        item_key="ITEM0001", note_text="<p>x</p>", append=False, ctx=DummyContext()
-    )
+    result = server.update_note(item_key="ITEM0001", note_text="<p>x</p>", append=False, ctx=DummyContext())
 
     assert "is not a note" in result
     assert fake.updated == []
@@ -306,9 +296,7 @@ def test_update_note_missing_key(monkeypatch):
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
     monkeypatch.setattr("zotero_mcp.utils.is_local_mode", lambda: False)
 
-    result = server.update_note(
-        item_key="ZZZZZZZZ", note_text="<p>x</p>", append=False, ctx=DummyContext()
-    )
+    result = server.update_note(item_key="ZZZZZZZZ", note_text="<p>x</p>", append=False, ctx=DummyContext())
 
     assert "No item found" in result
     assert fake.updated == []

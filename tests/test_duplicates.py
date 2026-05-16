@@ -1,14 +1,13 @@
 """Tests for Features 7-8: find_duplicates and merge_duplicates."""
 
-import pytest
+from conftest import FakeZotero, _FakeResponse
 
-from conftest import DummyContext, FakeZotero, _FakeResponse
 from zotero_mcp import server
-
 
 # ---------------------------------------------------------------------------
 # Helpers: item factory and extended FakeZotero for duplicates
 # ---------------------------------------------------------------------------
+
 
 def _make_item(key, title, doi=None, collections=None, tags=None, version=1):
     """Build a minimal Zotero item dict."""
@@ -42,8 +41,8 @@ class FakeZoteroForDuplicates(FakeZotero):
 
     def __init__(self):
         super().__init__()
-        self.addto_calls = []        # [(collection_key, items)]
-        self.update_calls = []       # [item_dict, ...]
+        self.addto_calls = []  # [(collection_key, items)]
+        self.update_calls = []  # [item_dict, ...]
         self._version_counter = 100  # auto-increment on update_item
         # Attributes needed for direct PATCH (trash operation)
         self.client = _FakeHttpClient()
@@ -78,6 +77,7 @@ class FakeZoteroForDuplicates(FakeZotero):
 # ---------------------------------------------------------------------------
 # Feature 7: find_duplicates
 # ---------------------------------------------------------------------------
+
 
 class TestFindDuplicates:
     """Tests for zotero_find_duplicates."""
@@ -159,9 +159,7 @@ class TestFindDuplicates:
         ]
         monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
 
-        result = server.find_duplicates(
-            method="title", collection_key="COL1", ctx=dummy_ctx
-        )
+        result = server.find_duplicates(method="title", collection_key="COL1", ctx=dummy_ctx)
 
         # E1 and E2 should be grouped; E3 is in COL2, should not appear
         assert "E1" in result
@@ -205,6 +203,7 @@ class TestFindDuplicates:
 # Feature 8: merge_duplicates
 # ---------------------------------------------------------------------------
 
+
 class TestMergeDuplicatesDryRun:
     """Tests for merge_duplicates with confirm=False (dry-run)."""
 
@@ -217,17 +216,21 @@ class TestMergeDuplicatesDryRun:
         ]
         fake._children = {
             "DUP1": [
-                {"key": "NOTE1", "version": 1, "data": {
-                    "itemType": "note", "parentItem": "DUP1", "note": "A note",
-                }},
+                {
+                    "key": "NOTE1",
+                    "version": 1,
+                    "data": {
+                        "itemType": "note",
+                        "parentItem": "DUP1",
+                        "note": "A note",
+                    },
+                },
             ],
         }
         monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
         monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
 
-        result = server.merge_duplicates(
-            keeper_key="KEEP", duplicate_keys=["DUP1"], confirm=False, ctx=dummy_ctx
-        )
+        result = server.merge_duplicates(keeper_key="KEEP", duplicate_keys=["DUP1"], confirm=False, ctx=dummy_ctx)
 
         # Should mention it is a preview / dry-run
         assert "confirm" in result.lower() or "preview" in result.lower() or "dry" in result.lower()
@@ -250,9 +253,7 @@ class TestMergeDuplicatesDryRun:
         monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
         monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
 
-        server.merge_duplicates(
-            keeper_key="KEEP", duplicate_keys=["DUP1", "DUP2"], confirm=False, ctx=dummy_ctx
-        )
+        server.merge_duplicates(keeper_key="KEEP", duplicate_keys=["DUP1", "DUP2"], confirm=False, ctx=dummy_ctx)
 
         assert fake.update_calls == []
         assert fake.addto_calls == []
@@ -266,21 +267,39 @@ class TestMergeDuplicatesConfirm:
         fake = FakeZoteroForDuplicates()
         # Child items (must also be in _items so write_zot.item(child_key) works
         # during re-parenting)
-        note1 = {"key": "NOTE1", "version": 10, "data": {
-            "itemType": "note", "parentItem": "DUP1", "note": "child note",
-        }}
-        att1 = {"key": "ATT1", "version": 11, "data": {
-            "itemType": "attachment", "parentItem": "DUP1",
-            "contentType": "application/pdf",
-        }}
-        annot1 = {"key": "ANNOT1", "version": 12, "data": {
-            "itemType": "annotation", "parentItem": "DUP2",
-        }}
+        note1 = {
+            "key": "NOTE1",
+            "version": 10,
+            "data": {
+                "itemType": "note",
+                "parentItem": "DUP1",
+                "note": "child note",
+            },
+        }
+        att1 = {
+            "key": "ATT1",
+            "version": 11,
+            "data": {
+                "itemType": "attachment",
+                "parentItem": "DUP1",
+                "contentType": "application/pdf",
+            },
+        }
+        annot1 = {
+            "key": "ANNOT1",
+            "version": 12,
+            "data": {
+                "itemType": "annotation",
+                "parentItem": "DUP2",
+            },
+        }
         fake._items = [
             _make_item("KEEP", "Keeper", tags=["shared", "keeperOnly"], collections=["COL_A"], version=1),
             _make_item("DUP1", "Dup1", tags=["shared", "dup1Only"], collections=["COL_B"], version=2),
             _make_item("DUP2", "Dup2", tags=["dup2Only"], collections=["COL_A", "COL_C"], version=3),
-            note1, att1, annot1,
+            note1,
+            att1,
+            annot1,
         ]
         fake._children = {
             "DUP1": [note1, att1],
@@ -294,9 +313,7 @@ class TestMergeDuplicatesConfirm:
         """All unique tags from duplicates are consolidated into keeper."""
         fake = self._setup_merge(monkeypatch)
 
-        result = server.merge_duplicates(
-            keeper_key="KEEP", duplicate_keys=["DUP1", "DUP2"], confirm=True, ctx=dummy_ctx
-        )
+        server.merge_duplicates(keeper_key="KEEP", duplicate_keys=["DUP1", "DUP2"], confirm=True, ctx=dummy_ctx)
 
         # Find the keeper update that has tags
         keeper_updates = [u for u in fake.update_calls if u.get("key") == "KEEP"]
@@ -311,16 +328,11 @@ class TestMergeDuplicatesConfirm:
         """Child items (notes, attachments, annotations) get parentItem set to keeper."""
         fake = self._setup_merge(monkeypatch)
 
-        server.merge_duplicates(
-            keeper_key="KEEP", duplicate_keys=["DUP1", "DUP2"], confirm=True, ctx=dummy_ctx
-        )
+        server.merge_duplicates(keeper_key="KEEP", duplicate_keys=["DUP1", "DUP2"], confirm=True, ctx=dummy_ctx)
 
         # Collect all child reparenting updates
         child_keys = {"NOTE1", "ATT1", "ANNOT1"}
-        reparented = [
-            u for u in fake.update_calls
-            if u.get("key") in child_keys
-        ]
+        reparented = [u for u in fake.update_calls if u.get("key") in child_keys]
         # All children should be reparented
         assert len(reparented) == 3
         for child_update in reparented:
@@ -333,14 +345,13 @@ class TestMergeDuplicatesConfirm:
         delete_calls = []
         fake.delete_item = lambda *a, **kw: delete_calls.append(a)
 
-        server.merge_duplicates(
-            keeper_key="KEEP", duplicate_keys=["DUP1", "DUP2"], confirm=True, ctx=dummy_ctx
-        )
+        server.merge_duplicates(keeper_key="KEEP", duplicate_keys=["DUP1", "DUP2"], confirm=True, ctx=dummy_ctx)
 
         # delete_item should never be called
         assert delete_calls == []
         # Direct PATCH calls should have been made for each duplicate
         import json
+
         patch_calls = fake.client.patch_calls
         trashed_contents = [json.loads(c["content"]) for c in patch_calls]
         assert len(trashed_contents) == 2
@@ -350,9 +361,7 @@ class TestMergeDuplicatesConfirm:
         """Keeper is added to every collection the duplicates belonged to."""
         fake = self._setup_merge(monkeypatch)
 
-        server.merge_duplicates(
-            keeper_key="KEEP", duplicate_keys=["DUP1", "DUP2"], confirm=True, ctx=dummy_ctx
-        )
+        server.merge_duplicates(keeper_key="KEEP", duplicate_keys=["DUP1", "DUP2"], confirm=True, ctx=dummy_ctx)
 
         # Keeper was already in COL_A, so addto_collection should be called for COL_B and COL_C
         added_colls = {call[0] for call in fake.addto_calls}
@@ -377,7 +386,6 @@ class TestMergeDuplicatesConfirm:
         )
 
         # Keeper should NOT be trashed — check the direct PATCH calls
-        import json
         trashed_urls = [c["url"] for c in fake.client.patch_calls]
         assert not any("KEEP" in url for url in trashed_urls)
         # DUP1 should be trashed
@@ -392,9 +400,7 @@ class TestMergeDuplicatesConfirm:
         monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
         monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
 
-        result = server.merge_duplicates(
-            keeper_key="KEEP", duplicate_keys=[], confirm=True, ctx=dummy_ctx
-        )
+        result = server.merge_duplicates(keeper_key="KEEP", duplicate_keys=[], confirm=True, ctx=dummy_ctx)
 
         assert "error" in result.lower() or "no duplicate" in result.lower()
         assert fake.update_calls == []
@@ -407,9 +413,7 @@ class TestMergeDuplicatesConfirm:
         monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
         monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
 
-        result = server.merge_duplicates(
-            keeper_key="KEEP", duplicate_keys=["KEEP"], confirm=True, ctx=dummy_ctx
-        )
+        result = server.merge_duplicates(keeper_key="KEEP", duplicate_keys=["KEEP"], confirm=True, ctx=dummy_ctx)
 
         assert "no duplicate" in result.lower() or "empty" in result.lower() or "error" in result.lower()
         assert fake.update_calls == []
@@ -417,16 +421,27 @@ class TestMergeDuplicatesConfirm:
     def test_partial_reparent_failure_aborts(self, monkeypatch, dummy_ctx):
         """If a child re-parent fails, stop immediately and don't trash anything."""
         fake = FakeZoteroForDuplicates()
-        child_ok = {"key": "CHILD_OK", "version": 10, "data": {
-            "itemType": "note", "parentItem": "DUP1",
-        }}
-        child_fail = {"key": "CHILD_FAIL", "version": 11, "data": {
-            "itemType": "attachment", "parentItem": "DUP1",
-        }}
+        child_ok = {
+            "key": "CHILD_OK",
+            "version": 10,
+            "data": {
+                "itemType": "note",
+                "parentItem": "DUP1",
+            },
+        }
+        child_fail = {
+            "key": "CHILD_FAIL",
+            "version": 11,
+            "data": {
+                "itemType": "attachment",
+                "parentItem": "DUP1",
+            },
+        }
         fake._items = [
             _make_item("KEEP", "Keeper", version=1),
             _make_item("DUP1", "Dup", version=2),
-            child_ok, child_fail,
+            child_ok,
+            child_fail,
         ]
         fake._children = {
             "DUP1": [child_ok, child_fail],
@@ -447,9 +462,7 @@ class TestMergeDuplicatesConfirm:
 
         fake.update_item = failing_update
 
-        result = server.merge_duplicates(
-            keeper_key="KEEP", duplicate_keys=["DUP1"], confirm=True, ctx=dummy_ctx
-        )
+        result = server.merge_duplicates(keeper_key="KEEP", duplicate_keys=["DUP1"], confirm=True, ctx=dummy_ctx)
 
         # Should report the failure
         assert "fail" in result.lower() or "error" in result.lower() or "CHILD_FAIL" in result
@@ -477,9 +490,7 @@ class TestMergeDuplicatesConfirm:
 
         fake.item = tracking_item
 
-        server.merge_duplicates(
-            keeper_key="KEEP", duplicate_keys=["DUP1"], confirm=True, ctx=dummy_ctx
-        )
+        server.merge_duplicates(keeper_key="KEEP", duplicate_keys=["DUP1"], confirm=True, ctx=dummy_ctx)
 
         # Keeper should be fetched multiple times: initial + after tag update + after collection add
         keeper_fetches = [k for k in fetch_log if k == "KEEP"]
@@ -499,9 +510,7 @@ class TestMergeDuplicatesConfirm:
         monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
 
         # Pass a single string instead of a list
-        result = server.merge_duplicates(
-            keeper_key="KEEP", duplicate_keys="DUP1", confirm=True, ctx=dummy_ctx
-        )
+        server.merge_duplicates(keeper_key="KEEP", duplicate_keys="DUP1", confirm=True, ctx=dummy_ctx)
 
         # Should succeed — DUP1 trashed via direct PATCH
         assert any("DUP1" in c["url"] for c in fake.client.patch_calls)

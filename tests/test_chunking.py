@@ -88,10 +88,8 @@ class FakeChromaClient:
         return self._search_response
 
 
-def _build_search(monkeypatch, chroma=None, config_path=None,
-                  zotero_client=None):
-    monkeypatch.setattr(semantic_search, "get_zotero_client",
-                        lambda: zotero_client or object())
+def _build_search(monkeypatch, chroma=None, config_path=None, zotero_client=None):
+    monkeypatch.setattr(semantic_search, "get_zotero_client", lambda: zotero_client or object())
     monkeypatch.setattr(semantic_search, "is_local_mode", lambda: False)
     return semantic_search.ZoteroSemanticSearch(
         chroma_client=chroma or FakeChromaClient(),
@@ -116,6 +114,7 @@ def _write_config(tmp_path, extra=None):
 
 
 # --------- Chunking ---------
+
 
 def test_chunk_short_text_returns_single_chunk(monkeypatch):
     search = _build_search(monkeypatch)
@@ -160,6 +159,7 @@ def test_chunk_size_respects_window(monkeypatch):
     chunks = search._chunk_document(text, window=window, overlap=10)
     # Use the same tokenizer the chunker relies on
     from zotero_mcp.semantic_search import _tokenizer
+
     if _tokenizer is None:
         pytest.skip("tiktoken not available")
     for c in chunks:
@@ -167,6 +167,7 @@ def test_chunk_size_respects_window(monkeypatch):
 
 
 # --------- Chunked ingest via _process_item_batch ---------
+
 
 def _item(key, title="Paper", fulltext=""):
     return {
@@ -203,9 +204,13 @@ def test_process_item_batch_emits_chunked_ids(monkeypatch):
 
 
 def test_process_item_batch_cleans_stale_chunks_before_upsert(monkeypatch):
-    chroma = FakeChromaClient(preloaded_ids=[
-        "ITEM1__0", "ITEM1__1", "ITEM1__2",  # stale chunks from prior run
-    ])
+    chroma = FakeChromaClient(
+        preloaded_ids=[
+            "ITEM1__0",
+            "ITEM1__1",
+            "ITEM1__2",  # stale chunks from prior run
+        ]
+    )
     search = _build_search(monkeypatch, chroma=chroma)
     item = _item("ITEM1", title="T", fulltext="body")  # short → 1 chunk
     search._process_item_batch([item], force_rebuild=False)
@@ -215,18 +220,21 @@ def test_process_item_batch_cleans_stale_chunks_before_upsert(monkeypatch):
 
 # --------- Groupby rerank (_dedupe_by_parent + search) ---------
 
+
 def test_dedupe_by_parent_keeps_best_chunk(monkeypatch):
     search = _build_search(monkeypatch)
     raw = {
         "ids": [["P1__0", "P1__2", "P2__0", "P1__1"]],
         "distances": [[0.5, 0.3, 0.4, 0.1]],
         "documents": [["d0", "d2", "p2d0", "d1"]],
-        "metadatas": [[
-            {"parent_item_key": "P1", "chunk_index": 0},
-            {"parent_item_key": "P1", "chunk_index": 2},
-            {"parent_item_key": "P2", "chunk_index": 0},
-            {"parent_item_key": "P1", "chunk_index": 1},
-        ]],
+        "metadatas": [
+            [
+                {"parent_item_key": "P1", "chunk_index": 0},
+                {"parent_item_key": "P1", "chunk_index": 2},
+                {"parent_item_key": "P2", "chunk_index": 0},
+                {"parent_item_key": "P1", "chunk_index": 1},
+            ]
+        ],
     }
     out = search._dedupe_by_parent(raw, keep=10)
     ids = out["ids"][0]
@@ -263,6 +271,7 @@ def test_dedupe_by_parent_falls_back_to_id_prefix(monkeypatch):
 
 def test_search_enriches_with_parent_key(monkeypatch):
     """Enrichment must look up the parent item, not the chunk id."""
+
     class RecordingZoteroClient:
         def __init__(self):
             self.calls = []
@@ -290,13 +299,16 @@ def test_search_enriches_with_parent_key(monkeypatch):
 def test_search_oversamples_for_chunking(monkeypatch):
     chroma = FakeChromaClient()
     chroma.set_search_response(
-        ids=["X__0"], distances=[0.1], documents=["d"],
+        ids=["X__0"],
+        distances=[0.1],
+        documents=["d"],
         metadatas=[{"parent_item_key": "X"}],
     )
 
     class StubZotero:
         def item(self, k):
             return {"key": k, "data": {"title": "x"}}
+
     search = _build_search(monkeypatch, chroma=chroma, zotero_client=StubZotero())
     search.search("q", limit=5)
     # Chunked oversample: max(limit * 5, 50) = 50 for small limits
@@ -304,6 +316,7 @@ def test_search_oversamples_for_chunking(monkeypatch):
 
 
 # --------- Throttle ---------
+
 
 def test_throttle_with_no_config_is_noop(monkeypatch):
     search = _build_search(monkeypatch)
@@ -338,6 +351,7 @@ def test_throttle_respects_invalid_rps(monkeypatch, tmp_path):
 
 # --------- Legacy id-format migration ---------
 
+
 def test_legacy_id_format_triggers_rebuild(monkeypatch, tmp_path):
     """A collection built by the pre-chunking code (ids = raw item keys with
     no `__` delimiter) must be reset on next update_database call so the
@@ -350,7 +364,7 @@ def test_legacy_id_format_triggers_rebuild(monkeypatch, tmp_path):
             self.versions = {"X": 99}
 
         def items(self, start=0, limit=100, **_):
-            return self.scenario_items[start:start + limit]
+            return self.scenario_items[start : start + limit]
 
         def item(self, k):
             return self.scenario_items[0]
@@ -371,8 +385,7 @@ def test_legacy_id_format_triggers_rebuild(monkeypatch, tmp_path):
 
     # Preload with legacy-format ids (no __ delimiter)
     chroma = FakeChromaClient(preloaded_ids=["LEGACY_A", "LEGACY_B"])
-    search = _build_search(monkeypatch, chroma=chroma, zotero_client=StubZotero(),
-                           config_path=config_path)
+    search = _build_search(monkeypatch, chroma=chroma, zotero_client=StubZotero(), config_path=config_path)
 
     search.update_database()
 
@@ -392,7 +405,7 @@ def test_empty_collection_with_cached_sync_is_gap_filled(monkeypatch, tmp_path):
             self.items_data = [_item("ONLY_ONE")]
 
         def items(self, start=0, limit=100, **_):
-            return self.items_data[start:start + limit]
+            return self.items_data[start : start + limit]
 
         def item(self, k):
             return self.items_data[0]
@@ -416,8 +429,7 @@ def test_empty_collection_with_cached_sync_is_gap_filled(monkeypatch, tmp_path):
 
     # Collection is empty (e.g. model-change reset)
     chroma = FakeChromaClient(preloaded_ids=[])
-    search = _build_search(monkeypatch, chroma=chroma, zotero_client=StubZotero(),
-                           config_path=config_path)
+    search = _build_search(monkeypatch, chroma=chroma, zotero_client=StubZotero(), config_path=config_path)
 
     stats = search.update_database()
 
@@ -443,14 +455,14 @@ def test_new_id_format_does_not_trigger_rebuild(monkeypatch, tmp_path):
             return {}
 
     chroma = FakeChromaClient(preloaded_ids=["A__0", "A__1", "B__0"])
-    search = _build_search(monkeypatch, chroma=chroma, zotero_client=StubZotero(),
-                           config_path=config_path)
+    search = _build_search(monkeypatch, chroma=chroma, zotero_client=StubZotero(), config_path=config_path)
 
     search.update_database()
     assert chroma.reset_calls == 0
 
 
 # --------- Config loaders ---------
+
 
 def test_load_chunking_settings_defaults(monkeypatch, tmp_path):
     search = _build_search(monkeypatch, config_path=str(tmp_path / "missing.json"))
@@ -473,6 +485,7 @@ def test_load_embedding_rate_limit_defaults_none(monkeypatch, tmp_path):
 
 # --------- OpenAIEmbeddingFunction sub-batching ---------
 
+
 def test_openai_embedding_sub_batches_large_input():
     """When input exceeds request_batch_size, __call__ splits the request.
 
@@ -480,10 +493,11 @@ def test_openai_embedding_sub_batches_large_input():
     sub-batching, any item that chunks into >64 pieces would 413. This
     test fakes the openai client and confirms request splitting.
     """
-    from zotero_mcp.chroma_client import OpenAIEmbeddingFunction
+    import threading as _t
     from unittest.mock import MagicMock
 
-    import threading as _t
+    from zotero_mcp.chroma_client import OpenAIEmbeddingFunction
+
     ef = OpenAIEmbeddingFunction.__new__(OpenAIEmbeddingFunction)
     ef.model_name = "BAAI/bge-m3"
     ef.api_key = "test"
@@ -498,6 +512,7 @@ def test_openai_embedding_sub_batches_large_input():
         resp = MagicMock()
         resp.data = [MagicMock(embedding=[float(i)]) for i in range(len(input))]
         return resp
+
     ef.client.embeddings.create.side_effect = fake_create
 
     # 7 inputs with batch_size=3 -> 3 requests: 3 + 3 + 1
@@ -505,17 +520,20 @@ def test_openai_embedding_sub_batches_large_input():
     assert len(result) == 7
     assert ef.client.embeddings.create.call_count == 3
     # Verify the split sizes
-    call_args = [c.kwargs.get("input", c.args[1] if len(c.args) > 1 else None)
-                 for c in ef.client.embeddings.create.call_args_list]
+    call_args = [
+        c.kwargs.get("input", c.args[1] if len(c.args) > 1 else None)
+        for c in ef.client.embeddings.create.call_args_list
+    ]
     assert [len(ca) for ca in call_args] == [3, 3, 1]
 
 
 def test_openai_embedding_single_request_when_under_batch_size():
     """Small inputs still hit the endpoint exactly once."""
-    from zotero_mcp.chroma_client import OpenAIEmbeddingFunction
+    import threading as _t
     from unittest.mock import MagicMock
 
-    import threading as _t
+    from zotero_mcp.chroma_client import OpenAIEmbeddingFunction
+
     ef = OpenAIEmbeddingFunction.__new__(OpenAIEmbeddingFunction)
     ef.model_name = "text-embedding-3-small"
     ef.api_key = "test"

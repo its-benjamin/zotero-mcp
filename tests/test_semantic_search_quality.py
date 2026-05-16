@@ -7,6 +7,8 @@ Covers:
 - Fix 5: Cross-encoder re-ranking
 """
 
+# ruff: noqa: E402,I001
+
 import importlib.util
 import sys
 from unittest.mock import MagicMock, patch
@@ -25,6 +27,7 @@ from zotero_mcp import semantic_search
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class FakeChromaClient:
     """Minimal ChromaClient stub for unit tests."""
@@ -78,6 +81,7 @@ def _make_item(key, title="Test", abstract="Abstract", fulltext="", creators=Non
 # Fix 1: Combine structured fields + fulltext
 # ---------------------------------------------------------------------------
 
+
 class TestCombineStructuredAndFulltext:
     def _make_search(self):
         with patch.object(semantic_search, "get_zotero_client", return_value=object()):
@@ -118,6 +122,7 @@ class TestCombineStructuredAndFulltext:
 # Fix 2: Gemini query/document embedding asymmetry
 # ---------------------------------------------------------------------------
 
+
 class TestGeminiQueryEmbedding:
     def test_gemini_embed_query_uses_retrieval_query(self):
         """Verify GeminiEmbeddingFunction.embed_query passes retrieval_query task type."""
@@ -136,13 +141,14 @@ class TestGeminiQueryEmbedding:
         ef.model_name = "gemini-embedding-001"
         ef.client = mock_client
         ef.types = mock_types
+        ef.output_dimensionality = None
+        ef.max_retries = 0
+        ef.rate_limited = False
 
         result = ef.embed_query("test query")
 
         # Verify embed_content was called
         mock_client.models.embed_content.assert_called_once()
-        call_kwargs = mock_client.models.embed_content.call_args
-        config_arg = call_kwargs.kwargs.get("config") or call_kwargs[1].get("config")
         # Verify the task_type was retrieval_query
         mock_types.EmbedContentConfig.assert_called_once_with(task_type="retrieval_query")
         assert result == [0.1, 0.2, 0.3]
@@ -164,6 +170,9 @@ class TestGeminiQueryEmbedding:
         ef.model_name = "gemini-embedding-001"
         ef.client = mock_client
         ef.types = mock_types
+        ef.output_dimensionality = None
+        ef.max_retries = 0
+        ef.rate_limited = False
 
         ef(["some document"])
 
@@ -172,10 +181,76 @@ class TestGeminiQueryEmbedding:
             title="Zotero library document",
         )
 
+    def test_gemini_output_dimensionality_is_configurable(self):
+        """Gemini should pass reduced vector dimensionality when configured."""
+        from zotero_mcp.chroma_client import GeminiEmbeddingFunction
+
+        mock_client = MagicMock()
+        mock_embedding = MagicMock()
+        mock_embedding.values = [0.4, 0.5, 0.6]
+        mock_response = MagicMock()
+        mock_response.embeddings = [mock_embedding]
+        mock_client.models.embed_content.return_value = mock_response
+
+        mock_types = MagicMock()
+
+        ef = GeminiEmbeddingFunction.__new__(GeminiEmbeddingFunction)
+        ef.model_name = "gemini-embedding-001"
+        ef.client = mock_client
+        ef.types = mock_types
+        ef.output_dimensionality = 768
+        ef.max_retries = 0
+        ef.rate_limited = False
+
+        ef(["some document"])
+
+        mock_types.EmbedContentConfig.assert_called_with(
+            task_type="retrieval_document",
+            title="Zotero library document",
+            output_dimensionality=768,
+        )
+
+    def test_gemini_rate_limit_retries_with_backoff(self, monkeypatch):
+        """Gemini SDK 429s should be retried before failing the batch."""
+        from zotero_mcp.chroma_client import GeminiEmbeddingFunction
+
+        sleeps = []
+
+        class RateLimitError(Exception):
+            status_code = 429
+
+        mock_client = MagicMock()
+        mock_embedding = MagicMock()
+        mock_embedding.values = [0.4, 0.5, 0.6]
+        mock_response = MagicMock()
+        mock_response.embeddings = [mock_embedding]
+        mock_client.models.embed_content.side_effect = [
+            RateLimitError("429 Too Many Requests"),
+            mock_response,
+        ]
+
+        mock_types = MagicMock()
+        monkeypatch.setattr("zotero_mcp.chroma_client.rate_limit", lambda provider: None)
+        monkeypatch.setattr("zotero_mcp.chroma_client.time.sleep", lambda seconds: sleeps.append(seconds))
+        monkeypatch.setattr("zotero_mcp.chroma_client.random.uniform", lambda start, end: 0.0)
+
+        ef = GeminiEmbeddingFunction.__new__(GeminiEmbeddingFunction)
+        ef.model_name = "gemini-embedding-001"
+        ef.client = mock_client
+        ef.types = mock_types
+        ef.output_dimensionality = None
+        ef.max_retries = 1
+        ef.rate_limited = True
+
+        assert ef(["some document"]) == [[0.4, 0.5, 0.6]]
+        assert mock_client.models.embed_content.call_count == 2
+        assert sleeps == [30.0]
+
 
 # ---------------------------------------------------------------------------
 # gemini-embedding-2-preview support
 # ---------------------------------------------------------------------------
+
 
 class TestGeminiV2Support:
     """Coverage for the v2-model-specific code paths.
@@ -196,11 +271,15 @@ class TestGeminiV2Support:
         the post-__init__ instance shape for v2 models.
         """
         from zotero_mcp.chroma_client import GeminiEmbeddingFunction
+
         ef = GeminiEmbeddingFunction.__new__(GeminiEmbeddingFunction)
         ef.model_name = model_name
         ef.client = mock_client
         ef.types = mock_types
         ef.max_input_tokens = 8000 - GeminiEmbeddingFunction.V2_PREFIX_TOKEN_BUDGET
+        ef.output_dimensionality = None
+        ef.max_retries = 0
+        ef.rate_limited = False
         return ef
 
     def test_v2_call_prepends_doc_prefix_no_config(self):
@@ -223,9 +302,7 @@ class TestGeminiV2Support:
         call_kwargs = mock_client.models.embed_content.call_args.kwargs
         # v2 uses no EmbedContentConfig — task instruction goes in the prompt
         assert "config" not in call_kwargs
-        assert call_kwargs["contents"] == [
-            f"{GeminiEmbeddingFunction.V2_DOC_PREFIX}doc text"
-        ]
+        assert call_kwargs["contents"] == [f"{GeminiEmbeddingFunction.V2_DOC_PREFIX}doc text"]
         mock_types.EmbedContentConfig.assert_not_called()
 
     def test_v2_embed_query_prepends_query_prefix_no_config(self):
@@ -247,9 +324,7 @@ class TestGeminiV2Support:
         mock_client.models.embed_content.assert_called_once()
         call_kwargs = mock_client.models.embed_content.call_args.kwargs
         assert "config" not in call_kwargs
-        assert call_kwargs["contents"] == [
-            f"{GeminiEmbeddingFunction.V2_QUERY_PREFIX}query text"
-        ]
+        assert call_kwargs["contents"] == [f"{GeminiEmbeddingFunction.V2_QUERY_PREFIX}query text"]
         mock_types.EmbedContentConfig.assert_not_called()
         assert result == [0.4, 0.5, 0.6]
 
@@ -280,7 +355,7 @@ class TestGeminiV2Support:
         # Must start with the v2 query prefix
         assert sent.startswith(GeminiEmbeddingFunction.V2_QUERY_PREFIX)
         # Body after the prefix must be truncated (not the full 50_000 chars)
-        body = sent[len(GeminiEmbeddingFunction.V2_QUERY_PREFIX):]
+        body = sent[len(GeminiEmbeddingFunction.V2_QUERY_PREFIX) :]
         assert len(body) == 7980 * 4  # truncate() uses 4 chars/token
 
     def test_v2_batch_preserves_order_across_chunks(self):
@@ -295,8 +370,7 @@ class TestGeminiV2Support:
         def fake_embed_content(model, contents, **kwargs):
             response = MagicMock()
             response.embeddings = [
-                MagicMock(values=[float(ord(c[len(GeminiEmbeddingFunction.V2_DOC_PREFIX)]))])
-                for c in contents
+                MagicMock(values=[float(ord(c[len(GeminiEmbeddingFunction.V2_DOC_PREFIX)]))]) for c in contents
             ]
             return response
 
@@ -343,55 +417,53 @@ class TestVoyageEmbedding:
     def test_voyage_call_uses_document_input_type_and_preserves_order(self, monkeypatch):
         from zotero_mcp.chroma_client import VoyageEmbeddingFunction
 
-        calls = []
+        class Result:
+            embeddings = [[1.0], [2.0]]
 
-        class Response:
-            def raise_for_status(self):
-                return None
+        class Client:
+            def __init__(self):
+                self.calls = []
 
-            def json(self):
-                return {
-                    "data": [
-                        {"index": 1, "embedding": [2.0]},
-                        {"index": 0, "embedding": [1.0]},
-                    ]
-                }
+            def count_tokens(self, texts, model=None):
+                return len(texts)
 
-        def fake_post(provider, url, **kwargs):
-            calls.append((provider, url, kwargs))
-            return Response()
+            def embed(self, texts, **kwargs):
+                self.calls.append((list(texts), kwargs))
+                return Result()
 
-        monkeypatch.setattr("zotero_mcp.chroma_client.rate_limited_post", fake_post)
+        client = Client()
+        monkeypatch.setattr(VoyageEmbeddingFunction, "_create_client", lambda self: client)
+        monkeypatch.setattr("zotero_mcp.chroma_client.rate_limit", lambda provider: None)
 
-        ef = VoyageEmbeddingFunction(model_name="voyage-3.5", api_key="test-key")
+        ef = VoyageEmbeddingFunction(model_name="voyage-4-lite", api_key="test-key")
         result = ef(["doc one", "doc two"])
 
         assert result == [[1.0], [2.0]]
-        provider, url, kwargs = calls[0]
-        assert provider == "voyage"
-        assert url == "https://api.voyageai.com/v1/embeddings"
-        assert kwargs["json"]["input_type"] == "document"
-        assert kwargs["json"]["model"] == "voyage-3.5"
+        texts, kwargs = client.calls[0]
+        assert texts == ["doc one", "doc two"]
+        assert kwargs["input_type"] == "document"
+        assert kwargs["model"] == "voyage-4-lite"
 
     def test_voyage_embed_query_uses_query_input_type(self, monkeypatch):
         from zotero_mcp.chroma_client import VoyageEmbeddingFunction
 
         captured = {}
 
-        class Response:
-            def raise_for_status(self):
-                return None
+        class Result:
+            embeddings = [[0.1, 0.2]]
 
-            def json(self):
-                return {"data": [{"index": 0, "embedding": [0.1, 0.2]}]}
+        class Client:
+            def count_tokens(self, texts, model=None):
+                return len(texts)
 
-        def fake_post(provider, url, **kwargs):
-            captured.update(kwargs["json"])
-            return Response()
+            def embed(self, texts, **kwargs):
+                captured.update(kwargs)
+                return Result()
 
-        monkeypatch.setattr("zotero_mcp.chroma_client.rate_limited_post", fake_post)
+        monkeypatch.setattr(VoyageEmbeddingFunction, "_create_client", lambda self: Client())
+        monkeypatch.setattr("zotero_mcp.chroma_client.rate_limit", lambda provider: None)
 
-        ef = VoyageEmbeddingFunction(model_name="voyage-3.5", api_key="test-key")
+        ef = VoyageEmbeddingFunction(model_name="voyage-4-lite", api_key="test-key")
         result = ef.embed_query("search text")
 
         assert result == [0.1, 0.2]
@@ -493,6 +565,7 @@ class TestDefaultEFUsesQueryTexts:
 # Fix 3: Model-aware tokenizer
 # ---------------------------------------------------------------------------
 
+
 class TestModelAwareTokenizer:
     def test_openai_truncate_uses_tiktoken(self):
         from zotero_mcp.chroma_client import OpenAIEmbeddingFunction
@@ -556,6 +629,7 @@ class TestModelAwareTokenizer:
 # Fix: all encode() call sites pass disallowed_special=().
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.skipif(
     not importlib.util.find_spec("tiktoken"),
     reason="tiktoken not installed",
@@ -564,14 +638,14 @@ class TestTiktokenSpecialTokenHandling:
     """Text containing tiktoken special tokens must not raise ValueError."""
 
     SPECIAL_TOKEN_TEXT = (
-        "The model uses <|endoftext|> as a separator token. "
-        "Other tokens include <|fim_prefix|> and <|fim_suffix|>."
+        "The model uses <|endoftext|> as a separator token. Other tokens include <|fim_prefix|> and <|fim_suffix|>."
     )
 
     @staticmethod
     def _expected_truncation(text, max_tokens):
         """Compute expected tiktoken truncation for exact-output assertions."""
         import tiktoken
+
         enc = tiktoken.get_encoding("cl100k_base")
         tokens = enc.encode(text, disallowed_special=())[:max_tokens]
         return enc.decode(tokens)
@@ -617,6 +691,7 @@ class TestTiktokenSpecialTokenHandling:
 # ---------------------------------------------------------------------------
 # Fix 5: Cross-encoder re-ranking
 # ---------------------------------------------------------------------------
+
 
 class TestReranking:
     def _make_search_with_reranker(self, enabled=True):

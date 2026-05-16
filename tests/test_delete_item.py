@@ -6,10 +6,9 @@ delete_item tool that wraps that mechanism for books, journalArticles,
 webpages, attachments, and so on.
 """
 
-import pytest
+from conftest import DummyContext
 
 from zotero_mcp import server
-from conftest import DummyContext
 
 
 class _FakePatchResponse:
@@ -48,7 +47,9 @@ def _book_item(key="BOOK0001", version=42):
         "key": key,
         "version": version,
         "data": {
-            "key": key, "version": version, "itemType": "book",
+            "key": key,
+            "version": version,
+            "itemType": "book",
             "title": "Some Book",
         },
     }
@@ -59,7 +60,9 @@ def _note_item(key="NOTE0001", version=3):
         "key": key,
         "version": version,
         "data": {
-            "key": key, "version": version, "itemType": "note",
+            "key": key,
+            "version": version,
+            "itemType": "note",
             "note": "<p>text</p>",
         },
     }
@@ -70,7 +73,9 @@ def _article_item(key="ART00001", version=7):
         "key": key,
         "version": version,
         "data": {
-            "key": key, "version": version, "itemType": "journalArticle",
+            "key": key,
+            "version": version,
+            "itemType": "journalArticle",
             "title": "A Paper",
         },
     }
@@ -79,8 +84,7 @@ def _article_item(key="ART00001", version=7):
 class TestDeleteItemSuccess:
     def test_trashes_book(self, monkeypatch):
         fake = _FakeZoteroForDelete({"BOOK0001": _book_item()})
-        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client",
-                            lambda ctx: (fake, fake))
+        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
 
         result = server.delete_item(item_key="BOOK0001", ctx=DummyContext())
 
@@ -94,8 +98,7 @@ class TestDeleteItemSuccess:
 
     def test_trashes_journal_article(self, monkeypatch):
         fake = _FakeZoteroForDelete({"ART00001": _article_item()})
-        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client",
-                            lambda ctx: (fake, fake))
+        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
 
         result = server.delete_item(item_key="ART00001", ctx=DummyContext())
 
@@ -107,8 +110,7 @@ class TestDeleteItemNotesSafety:
     def test_refuses_note_by_default(self, monkeypatch):
         """Notes are redirected to zotero_delete_note for explicitness."""
         fake = _FakeZoteroForDelete({"NOTE0001": _note_item()})
-        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client",
-                            lambda ctx: (fake, fake))
+        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
 
         result = server.delete_item(item_key="NOTE0001", ctx=DummyContext())
 
@@ -119,12 +121,9 @@ class TestDeleteItemNotesSafety:
     def test_allow_note_override(self, monkeypatch):
         """Explicit opt-in permits trashing a note through delete_item."""
         fake = _FakeZoteroForDelete({"NOTE0001": _note_item()})
-        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client",
-                            lambda ctx: (fake, fake))
+        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
 
-        result = server.delete_item(
-            item_key="NOTE0001", allow_note=True, ctx=DummyContext()
-        )
+        result = server.delete_item(item_key="NOTE0001", allow_note=True, ctx=DummyContext())
 
         assert "Successfully trashed" in result
         assert len(fake.client.calls) == 1
@@ -133,8 +132,7 @@ class TestDeleteItemNotesSafety:
 class TestDeleteItemErrors:
     def test_missing_item_key(self, monkeypatch):
         fake = _FakeZoteroForDelete({})
-        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client",
-                            lambda ctx: (fake, fake))
+        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
 
         result = server.delete_item(item_key="ZZZZZZZZ", ctx=DummyContext())
 
@@ -144,8 +142,7 @@ class TestDeleteItemErrors:
     def test_http_failure_reports(self, monkeypatch):
         fake = _FakeZoteroForDelete({"BOOK0001": _book_item()}, patch_status=412)
         fake.client._text = "Precondition failed"
-        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client",
-                            lambda ctx: (fake, fake))
+        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
 
         result = server.delete_item(item_key="BOOK0001", ctx=DummyContext())
 
@@ -158,6 +155,7 @@ class TestDeleteItemErrors:
                 "Cannot perform write operations in local-only mode. "
                 "Add ZOTERO_API_KEY and ZOTERO_LIBRARY_ID to enable hybrid mode."
             )
+
         monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", _raise)
 
         result = server.delete_item(item_key="BOOK0001", ctx=DummyContext())
@@ -170,8 +168,7 @@ class TestDeleteItemPatchShape:
 
     def test_url_targets_correct_library(self, monkeypatch):
         fake = _FakeZoteroForDelete({"BOOK0001": _book_item()})
-        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client",
-                            lambda ctx: (fake, fake))
+        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
 
         server.delete_item(item_key="BOOK0001", ctx=DummyContext())
 
@@ -180,8 +177,7 @@ class TestDeleteItemPatchShape:
 
     def test_version_header_matches_fetched_version(self, monkeypatch):
         fake = _FakeZoteroForDelete({"BOOK0001": _book_item(version=99)})
-        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client",
-                            lambda ctx: (fake, fake))
+        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
 
         server.delete_item(item_key="BOOK0001", ctx=DummyContext())
 

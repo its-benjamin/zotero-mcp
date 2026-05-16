@@ -33,11 +33,8 @@ class FakeZoteroForAnnotations:
     def children(self, item_key, start=0, limit=100, itemType=None, **_kwargs):
         all_children = self._children.get(item_key, [])
         if itemType:
-            all_children = [
-                c for c in all_children
-                if c.get("data", {}).get("itemType") == itemType
-            ]
-        return all_children[start:start + limit]
+            all_children = [c for c in all_children if c.get("data", {}).get("itemType") == itemType]
+        return all_children[start : start + limit]
 
 
 def _annotation(key, parent, text):

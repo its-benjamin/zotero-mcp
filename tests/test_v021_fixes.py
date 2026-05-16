@@ -3,15 +3,12 @@ merge attachment dedup, linked-URL removal, and no-PDF messaging."""
 
 from unittest.mock import MagicMock, patch
 
-import pytest
+from conftest import DummyContext
 
-from conftest import DummyContext, FakeZotero
 from zotero_mcp.tools import _helpers
 from zotero_mcp.tools.annotations import (
     _batch_resolve_grandparent_titles,
-    _batch_resolve_parent_titles,
 )
-
 
 # -------------------------------------------------------------------------
 # Fix 1 — Pagination helper
@@ -191,14 +188,17 @@ class TestMergeAttachmentDedup:
 
         write_zot = MagicMock()
         write_zot.item.side_effect = lambda k: (
-            keeper if k == "KEEPER" else
-            dup_item if k == "DUP1" else
+            keeper
+            if k == "KEEPER"
+            else dup_item
+            if k == "DUP1"
             # For child re-fetch during execute, return the child itself
-            next((c for c in keeper_children + dup_children if c.get("key") == k), {"key": k, "version": 1, "data": {}})
+            else next(
+                (c for c in keeper_children + dup_children if c.get("key") == k), {"key": k, "version": 1, "data": {}}
+            )
         )
         write_zot.children.side_effect = lambda k: (
-            keeper_children if k == "KEEPER" else
-            dup_children if k == "DUP1" else []
+            keeper_children if k == "KEEPER" else dup_children if k == "DUP1" else []
         )
         write_zot.update_item.return_value = MagicMock(status_code=204, text="")
         write_zot.addto_collection.return_value = MagicMock(status_code=204, text="")
@@ -244,10 +244,7 @@ class TestMergeAttachmentDedup:
 
         # The duplicate attachment should NOT have been re-parented
         # update_item should not be called for the dup attachment
-        reparent_calls = [
-            c for c in write_zot.update_item.call_args_list
-            if c[0][0].get("key") == "D_ATT"
-        ]
+        reparent_calls = [c for c in write_zot.update_item.call_args_list if c[0][0].get("key") == "D_ATT"]
         assert len(reparent_calls) == 0
         assert "D_ATT" not in result or "skipped" in result.lower() or "Merged" in result
 
@@ -284,11 +281,12 @@ class TestMergeAttachmentDedup:
 
         from zotero_mcp.tools.write import merge_duplicates
 
-        result = merge_duplicates("KEEPER", ["DUP1"], confirm=True, ctx=dummy_ctx)
+        merge_duplicates("KEEPER", ["DUP1"], confirm=True, ctx=dummy_ctx)
 
         # The different attachment SHOULD have been re-parented
         reparent_calls = [
-            c for c in write_zot.update_item.call_args_list
+            c
+            for c in write_zot.update_item.call_args_list
             if isinstance(c[0][0], dict) and c[0][0].get("key") == "D_ATT"
         ]
         assert len(reparent_calls) == 1
@@ -376,8 +374,7 @@ class TestLinkedUrlRemoval:
         ctx = DummyContext()
 
         result = _helpers._try_attach_oa_pdf(
-            write_zot, "ITEM1", "10.1234/test", ctx,
-            crossref_metadata=None, attach_mode="auto"
+            write_zot, "ITEM1", "10.1234/test", ctx, crossref_metadata=None, attach_mode="auto"
         )
 
         # linked_url should NOT be called in auto mode
@@ -391,9 +388,7 @@ class TestLinkedUrlRemoval:
     @patch("zotero_mcp.tools._helpers._try_semantic_scholar")
     @patch("zotero_mcp.tools._helpers._try_pmc")
     @patch("zotero_mcp.tools._helpers._attach_pdf_linked_url")
-    def test_linked_url_mode_still_works(
-        self, mock_linked, mock_pmc, mock_ss, mock_arxiv, mock_unpaywall
-    ):
+    def test_linked_url_mode_still_works(self, mock_linked, mock_pmc, mock_ss, mock_arxiv, mock_unpaywall):
         """In linked_url mode, _attach_pdf_linked_url IS called."""
         mock_unpaywall.return_value = "https://example.com/paper.pdf"
         mock_arxiv.return_value = None
@@ -405,8 +400,7 @@ class TestLinkedUrlRemoval:
         ctx = DummyContext()
 
         result = _helpers._try_attach_oa_pdf(
-            write_zot, "ITEM1", "10.1234/test", ctx,
-            crossref_metadata=None, attach_mode="linked_url"
+            write_zot, "ITEM1", "10.1234/test", ctx, crossref_metadata=None, attach_mode="linked_url"
         )
 
         mock_linked.assert_called_once()
@@ -416,9 +410,7 @@ class TestLinkedUrlRemoval:
     @patch("zotero_mcp.tools._helpers._try_arxiv_from_crossref")
     @patch("zotero_mcp.tools._helpers._try_semantic_scholar")
     @patch("zotero_mcp.tools._helpers._try_pmc")
-    def test_no_pdf_message_is_clear(
-        self, mock_pmc, mock_ss, mock_arxiv, mock_unpaywall
-    ):
+    def test_no_pdf_message_is_clear(self, mock_pmc, mock_ss, mock_arxiv, mock_unpaywall):
         """When no PDF is found, message clearly states no open-access PDF was found."""
         mock_unpaywall.return_value = None
         mock_arxiv.return_value = None
@@ -429,8 +421,7 @@ class TestLinkedUrlRemoval:
         ctx = DummyContext()
 
         result = _helpers._try_attach_oa_pdf(
-            write_zot, "ITEM1", "10.1234/test", ctx,
-            crossref_metadata=None, attach_mode="auto"
+            write_zot, "ITEM1", "10.1234/test", ctx, crossref_metadata=None, attach_mode="auto"
         )
 
         assert "no open-access PDF found" in result

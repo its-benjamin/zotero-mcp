@@ -3,6 +3,7 @@ Zotero client wrapper for MCP server.
 """
 
 import functools
+import logging
 import os
 import threading
 from dataclasses import dataclass
@@ -15,6 +16,8 @@ from pyzotero import zotero
 
 from zotero_mcp.rate_limiter import RateLimitedZotero
 from zotero_mcp.utils import format_creators
+
+_logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -30,10 +33,12 @@ _zotero_api_lock = threading.RLock()
 
 def with_zotero_api_lock(func):
     """Serialize Zotero API access across concurrent MCP tool threads."""
+
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         with _zotero_api_lock:
             return func(*args, **kwargs)
+
     return wrapper
 
 
@@ -106,7 +111,22 @@ def get_zotero_client() -> zotero.Zotero:
         api_key=api_key,
         local=local,
     )
-    return RateLimitedZotero(client, enabled=not local)
+    wrapped = RateLimitedZotero(client, enabled=not local)
+
+    # Eagerly verify local Zotero is reachable so users get a clear message
+    if local:
+        try:
+            client.items(limit=1)
+        except Exception as exc:
+            _logger.debug("Local Zotero connection check failed: %s", exc)
+            raise ConnectionError(
+                "Could not connect to Zotero on localhost:23119. "
+                "Make sure the Zotero desktop app is running and that "
+                "'Allow other applications on this computer to communicate with Zotero' "
+                "is enabled in Settings > Advanced."
+            ) from exc
+
+    return wrapped
 
 
 def get_local_zotero_client() -> zotero.Zotero | None:
@@ -298,6 +318,7 @@ def generate_bibtex(item: dict[str, Any]) -> str:
     # Try Better BibTeX first
     try:
         from zotero_mcp.better_bibtex_client import ZoteroBetterBibTexAPI
+
         bibtex = ZoteroBetterBibTexAPI()
 
         if bibtex.is_zotero_running():
@@ -324,7 +345,7 @@ def generate_bibtex(item: dict[str, Any]) -> str:
         "thesis": "phdthesis",
         "report": "techreport",
         "webpage": "misc",
-        "manuscript": "unpublished"
+        "manuscript": "unpublished",
     }
 
     # Create citation key
@@ -353,14 +374,14 @@ def generate_bibtex(item: dict[str, Any]) -> str:
         ("place", "address"),
         ("DOI", "doi"),
         ("url", "url"),
-        ("abstractNote", "abstract")
+        ("abstractNote", "abstract"),
     ]
 
     for zotero_field, bibtex_field in field_mappings:
         if value := data.get(zotero_field):
             # Escape special characters
             value = value.replace("{", "\\{").replace("}", "\\}")
-            lines.append(f'  {bibtex_field} = {{{value}}},')
+            lines.append(f"  {bibtex_field} = {{{value}}},")
 
     # Add authors
     if creators:
@@ -372,23 +393,21 @@ def generate_bibtex(item: dict[str, Any]) -> str:
                 elif "name" in creator:
                     authors.append(creator["name"])
         if authors:
-            lines.append(f'  author = {{{" and ".join(authors)}}},')
+            lines.append(f"  author = {{{' and '.join(authors)}}},")
 
     # Add year
     if year != "nodate":
-        lines.append(f'  year = {{{year}}},')
+        lines.append(f"  year = {{{year}}},")
 
     # Remove trailing comma from last field and close entry
-    if lines[-1].endswith(','):
+    if lines[-1].endswith(","):
         lines[-1] = lines[-1][:-1]
     lines.append("}")
 
     return "\n".join(lines)
 
 
-def get_attachment_details(
-    zot: zotero.Zotero, item: dict[str, Any]
-) -> AttachmentDetails | None:
+def get_attachment_details(zot: zotero.Zotero, item: dict[str, Any]) -> AttachmentDetails | None:
     """
     Get attachment details for a Zotero item, finding the most relevant attachment.
 

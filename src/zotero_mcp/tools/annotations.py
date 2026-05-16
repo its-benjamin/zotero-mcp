@@ -33,8 +33,7 @@ def _get_note_write_client(op_description: str):
         if zot is None:
             return None, (
                 f"Error: Web API credentials required for {op_description}.\n\n"
-                "Please configure the following environment variables:\n"
-                + _WEB_API_ENV_VARS
+                "Please configure the following environment variables:\n" + _WEB_API_ENV_VARS
             )
         override = _client.get_active_library()
         if override:
@@ -47,15 +46,11 @@ def _get_note_write_client(op_description: str):
 
 @mcp.tool(
     name="zotero_get_annotations",
-    description="Get all annotations for a specific item or across your entire Zotero library. When called without item_key, returns ALL annotations library-wide — this can be very large. Always pass item_key when you know which item you want."
+    description="Get all annotations for a specific item or across your entire Zotero library. When called without item_key, returns ALL annotations library-wide — this can be very large. Always pass item_key when you know which item you want.",
 )
 @with_zotero_api_lock
 def get_annotations(
-    item_key: str | None = None,
-    use_pdf_extraction: bool = False,
-    limit: int | str | None = None,
-    *,
-    ctx: Context
+    item_key: str | None = None, use_pdf_extraction: bool = False, limit: int | str | None = None, *, ctx: Context
 ) -> str:
     """
     Get annotations from your Zotero library.
@@ -96,11 +91,7 @@ def get_annotations(
 
             # parent_item_key is used by the PDF fallback to find PDF attachments.
             # If the caller passed an attachment key, resolve up to the parent item.
-            parent_item_key = (
-                _item_data.get("parentItem", item_key)
-                if _is_attachment
-                else item_key
-            )
+            parent_item_key = _item_data.get("parentItem", item_key) if _is_attachment else item_key
 
             # Initialize annotation sources
             better_bibtex_annotations = []
@@ -113,8 +104,8 @@ def get_annotations(
                     # Import Better BibTeX dependencies
                     from zotero_mcp.better_bibtex_client import (
                         ZoteroBetterBibTexAPI,
+                        get_color_category,
                         process_annotation,
-                        get_color_category
                     )
 
                     # Initialize Better BibTeX client
@@ -151,8 +142,8 @@ def get_annotations(
                                         ctx.info(f"Checking result: {result}")
 
                                         # Try to match with item key if possible
-                                        if result.get('citekey'):
-                                            citation_key = result['citekey']
+                                        if result.get("citekey"):
+                                            citation_key = result["citekey"]
                                             break
                             except Exception as e:
                                 ctx.warning(f"Error searching for citation key: {e}")
@@ -164,9 +155,11 @@ def get_annotations(
                                 library = "*"  # Default all libraries
                                 search_results = bibtex._make_request("item.search", [citation_key])
                                 if search_results:
-                                    matched_item = next((item for item in search_results if item.get('citekey') == citation_key), None)
+                                    matched_item = next(
+                                        (item for item in search_results if item.get("citekey") == citation_key), None
+                                    )
                                     if matched_item:
-                                        library = matched_item.get('library', "*")
+                                        library = matched_item.get("library", "*")
 
                                 # Get attachments
                                 attachments = bibtex.get_attachments(citation_key, library)
@@ -193,8 +186,8 @@ def get_annotations(
                                                     "_pageLabel": processed.get("pageLabel", ""),
                                                     "_attachment_title": attachment.get("title", ""),
                                                     "_color_category": get_color_category(processed.get("color", "")),
-                                                    "_from_better_bibtex": True
-                                                }
+                                                    "_from_better_bibtex": True,
+                                                },
                                             }
                                             better_bibtex_annotations.append(bibtex_anno)
 
@@ -216,9 +209,7 @@ def get_annotations(
                     if _is_attachment:
                         # item_key is already a PDF attachment -- annotations are
                         # direct children, so one paginated call suffices.
-                        zotero_api_annotations = _helpers._paginate(
-                            zot.children, item_key, itemType="annotation"
-                        )
+                        zotero_api_annotations = _helpers._paginate(zot.children, item_key, itemType="annotation")
                     else:
                         # item_key is a parent item. Annotations live under
                         # attachments (parent -> attachment -> annotation).
@@ -226,15 +217,14 @@ def get_annotations(
                         _annotatable = {"application/pdf", "application/epub+zip", "text/html"}
                         all_children = _helpers._paginate(zot.children, item_key)
                         att_keys = [
-                            c["key"] for c in all_children
+                            c["key"]
+                            for c in all_children
                             if c.get("data", {}).get("itemType") == "attachment"
                             and c.get("data", {}).get("contentType") in _annotatable
                         ]
                         seen = set()
                         for att_key in att_keys:
-                            for a in _helpers._paginate(
-                                zot.children, att_key, itemType="annotation"
-                            ):
+                            for a in _helpers._paginate(zot.children, att_key, itemType="annotation"):
                                 k = a.get("key")
                                 if k and k not in seen:
                                     seen.add(k)
@@ -246,15 +236,14 @@ def get_annotations(
             # PDF Extraction fallback
             if use_pdf_extraction and not (better_bibtex_annotations or zotero_api_annotations):
                 try:
-                    from zotero_mcp.pdfannots_helper import extract_annotations_from_pdf, ensure_pdfannots_installed
+                    from zotero_mcp.pdfannots_helper import ensure_pdfannots_installed, extract_annotations_from_pdf
 
                     # Ensure PDF annotation tool is installed
                     if ensure_pdfannots_installed():
                         # Get PDF attachments via the resolved parent key
                         children = zot.children(parent_item_key)
                         pdf_attachments = [
-                            item for item in children
-                            if item.get("data", {}).get("contentType") == "application/pdf"
+                            item for item in children if item.get("data", {}).get("contentType") == "application/pdf"
                         ]
 
                         # Extract annotations from PDFs
@@ -289,13 +278,15 @@ def get_annotations(
                                                 "tags": [],
                                                 "_pdf_page": ext.get("page", 0),
                                                 "_from_pdf_extraction": True,
-                                                "_attachment_title": attachment.get("data", {}).get("title", "PDF")
-                                            }
+                                                "_attachment_title": attachment.get("data", {}).get("title", "PDF"),
+                                            },
                                         }
 
                                         # Handle image annotations
                                         if ext.get("type") == "image" and ext.get("imageRelativePath"):
-                                            pdf_anno["data"]["_image_path"] = os.path.join(tmpdir, ext.get("imageRelativePath"))
+                                            pdf_anno["data"]["_image_path"] = os.path.join(
+                                                tmpdir, ext.get("imageRelativePath")
+                                            )
 
                                         pdf_annotations.append(pdf_anno)
 
@@ -344,7 +335,7 @@ def get_annotations(
             parent_info = ""
             if not item_key and (parent_key := data.get("parentItem")):
                 resolved_title = parent_titles.get(parent_key, f"(parent key: {parent_key})")
-                parent_info = f" (from \"{resolved_title}\")"
+                parent_info = f' (from "{resolved_title}")'
 
             # Annotation source details
             source_info = ""
@@ -412,8 +403,7 @@ def get_annotations(
         # Warn about large responses for library-wide queries
         if not item_key:
             result = _helpers._prepend_size_warning(
-                result,
-                "Pass item_key to get annotations for a specific item instead of library-wide."
+                result, "Pass item_key to get annotations for a specific item instead of library-wide."
             )
         return result
 
@@ -428,7 +418,7 @@ _get_annotations = get_annotations
 
 @mcp.tool(
     name="zotero_get_notes",
-    description="Retrieve notes from your Zotero library, with options to filter by parent item. Set raw_html=True to return the note's original HTML (e.g., for round-tripping through zotero_update_note)."
+    description="Retrieve notes from your Zotero library, with options to filter by parent item. Set raw_html=True to return the note's original HTML (e.g., for round-tripping through zotero_update_note).",
 )
 @with_zotero_api_lock
 def get_notes(
@@ -437,7 +427,7 @@ def get_notes(
     truncate: bool = True,
     raw_html: bool = False,
     *,
-    ctx: Context
+    ctx: Context,
 ) -> str:
     """
     Retrieve notes from your Zotero library.
@@ -493,7 +483,7 @@ def get_notes(
             parent_info = ""
             if parent_key := data.get("parentItem"):
                 resolved_title = note_parent_titles.get(parent_key, f"(parent key: {parent_key})")
-                parent_info = f" (from \"{resolved_title}\")"
+                parent_info = f' (from "{resolved_title}")'
 
             # Prepare note text
             note_text = data.get("note", "")
@@ -529,16 +519,15 @@ def get_notes(
 # Helpers for search_notes
 # ---------------------------------------------------------------------------
 
+
 @with_zotero_api_lock
-def _batch_resolve_parent_titles(
-    zot, parent_keys: set[str], ctx: Context
-) -> dict[str, str]:
+def _batch_resolve_parent_titles(zot, parent_keys: set[str], ctx: Context) -> dict[str, str]:
     """Fetch parent item titles in batch instead of one-by-one (N+1 fix)."""
     titles: dict[str, str] = {}
     keys_list = list(parent_keys)
     BATCH_SIZE = 50  # Zotero API limit for itemKey parameter
     for i in range(0, len(keys_list), BATCH_SIZE):
-        batch = keys_list[i:i + BATCH_SIZE]
+        batch = keys_list[i : i + BATCH_SIZE]
         try:
             items = zot.items(itemKey=",".join(batch))
             for item in items:
@@ -562,9 +551,7 @@ def _batch_resolve_parent_titles(
 
 
 @with_zotero_api_lock
-def _batch_resolve_grandparent_titles(
-    zot, parent_keys: set[str], ctx: Context
-) -> dict[str, str]:
+def _batch_resolve_grandparent_titles(zot, parent_keys: set[str], ctx: Context) -> dict[str, str]:
     """Resolve annotation parent keys to their grandparent (paper) titles.
 
     Annotations are children of PDF attachments, which are children of papers.
@@ -579,7 +566,7 @@ def _batch_resolve_grandparent_titles(
 
     keys_list = list(parent_keys)
     for i in range(0, len(keys_list), BATCH_SIZE):
-        batch = keys_list[i:i + BATCH_SIZE]
+        batch = keys_list[i : i + BATCH_SIZE]
         try:
             items = zot.items(itemKey=",".join(batch))
             for item in items:
@@ -608,13 +595,11 @@ def _batch_resolve_grandparent_titles(
     grandparent_titles: dict[str, str] = {}
     gp_list = list(grandparent_keys)
     for i in range(0, len(gp_list), BATCH_SIZE):
-        batch = gp_list[i:i + BATCH_SIZE]
+        batch = gp_list[i : i + BATCH_SIZE]
         try:
             items = zot.items(itemKey=",".join(batch))
             for item in items:
-                grandparent_titles[item.get("key", "")] = (
-                    item.get("data", {}).get("title", "Untitled")
-                )
+                grandparent_titles[item.get("key", "")] = item.get("data", {}).get("title", "Untitled")
         except Exception as e:
             ctx.info(f"Batch grandparent lookup failed: {e}")
 
@@ -705,16 +690,10 @@ def _format_search_results(
 
 @mcp.tool(
     name="zotero_search_notes",
-    description="Search for notes and annotations across your Zotero library. Set raw_html=True to return note matches as raw HTML (useful for round-tripping through zotero_update_note)."
+    description="Search for notes and annotations across your Zotero library. Set raw_html=True to return note matches as raw HTML (useful for round-tripping through zotero_update_note).",
 )
 @with_zotero_api_lock
-def search_notes(
-    query: str,
-    limit: int | str | None = 20,
-    raw_html: bool = False,
-    *,
-    ctx: Context
-) -> str:
+def search_notes(query: str, limit: int | str | None = 20, raw_html: bool = False, *, ctx: Context) -> str:
     """
     Search for notes and annotations in your Zotero library.
 
@@ -742,6 +721,7 @@ def search_notes(
     if _utils.is_local_mode():
         try:
             from zotero_mcp.local_db import get_local_zotero_reader
+
             reader = get_local_zotero_reader()
             if reader:
                 try:
@@ -771,8 +751,7 @@ def search_notes(
         notes = zot.items()
 
         # Batch-resolve parent titles
-        parent_keys = {n.get("data", {}).get("parentItem") for n in notes
-                       if n.get("data", {}).get("parentItem")}
+        parent_keys = {n.get("data", {}).get("parentItem") for n in notes if n.get("data", {}).get("parentItem")}
         parent_titles = _batch_resolve_parent_titles(zot, parent_keys, ctx) if parent_keys else {}
 
         query_lower = query.lower()
@@ -785,14 +764,16 @@ def search_notes(
 
             parent_key = data.get("parentItem")
             tags = [t["tag"] for t in data.get("tags", [])]
-            note_results.append({
-                "type": "note",
-                "key": note.get("key", ""),
-                "text": note_html,
-                "tags": tags,
-                "parent_key": parent_key,
-                "parent_title": parent_titles.get(parent_key) if parent_key else None,
-            })
+            note_results.append(
+                {
+                    "type": "note",
+                    "key": note.get("key", ""),
+                    "text": note_html,
+                    "tags": tags,
+                    "parent_key": parent_key,
+                    "parent_title": parent_titles.get(parent_key) if parent_key else None,
+                }
+            )
         ctx.info(f"API note search: {len(note_results)} results")
     except Exception as e:
         ctx.warning(f"Note search failed: {e}")
@@ -819,16 +800,18 @@ def search_notes(
                 continue
 
             parent_key = data.get("parentItem")
-            annotation_results.append({
-                "type": "annotation",
-                "key": anno.get("key", ""),
-                "text": anno_text,
-                "comment": anno_comment,
-                "annotation_type": data.get("annotationType", "highlight"),
-                "page_label": data.get("annotationPageLabel"),
-                "parent_key": parent_key,
-                "parent_title": anno_parent_titles.get(parent_key) if parent_key else None,
-            })
+            annotation_results.append(
+                {
+                    "type": "annotation",
+                    "key": anno.get("key", ""),
+                    "text": anno_text,
+                    "comment": anno_comment,
+                    "annotation_type": data.get("annotationType", "highlight"),
+                    "page_label": data.get("annotationPageLabel"),
+                    "parent_key": parent_key,
+                    "parent_title": anno_parent_titles.get(parent_key) if parent_key else None,
+                }
+            )
         ctx.info(f"API annotation search: {len(annotation_results)} results")
     except Exception as e:
         ctx.warning(f"Annotation search failed: {e}")
@@ -842,16 +825,11 @@ def search_notes(
         "Create a new note attached to a Zotero item. "
         "Parameters: item_key (the key of the parent item to attach the note to), "
         "note_title (title string), note_text (body text, HTML formatting supported)."
-    )
+    ),
 )
 @with_zotero_api_lock
 def create_note(
-    item_key: str,
-    note_title: str,
-    note_text: str,
-    tags: list[str] | str | None = None,
-    *,
-    ctx: Context
+    item_key: str, note_title: str, note_text: str, tags: list[str] | str | None = None, *, ctx: Context
 ) -> str:
     """
     Create a new note for a Zotero item.
@@ -896,11 +874,7 @@ def create_note(
         # Use note_title as a visible heading so the argument is not ignored.
         clean_title = (note_title or "").strip()
         if clean_title:
-            safe_title = (
-                clean_title.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
-            )
+            safe_title = clean_title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             html_content = f"<h1>{safe_title}</h1>{html_content}"
 
         # Prepare the note data
@@ -908,7 +882,7 @@ def create_note(
             "itemType": "note",
             "parentItem": item_key,
             "note": html_content,
-            "tags": [{"tag": tag} for tag in (tags or [])]
+            "tags": [{"tag": tag} for tag in (tags or [])],
         }
 
         # In local mode, the local API does not support POST to create items,
@@ -928,7 +902,7 @@ def create_note(
                     successful = result["success"]
                     if len(successful) > 0:
                         note_key = next(iter(successful.values()))
-                        return f"Successfully created note for \"{parent_title}\"\n\nNote key: {note_key}"
+                        return f'Successfully created note for "{parent_title}"\n\nNote key: {note_key}'
                     else:
                         return f"Note creation response was successful but no key was returned: {result}"
                 else:
@@ -956,11 +930,10 @@ def create_note(
                 )
                 if resp.status_code == 201:
                     return (
-                        f"Note created for \"{parent_title}\" but it is a standalone note, not attached "
+                        f'Note created for "{parent_title}" but it is a standalone note, not attached '
                         f"to the paper.\n\n"
                         "To create properly attached child notes, add these environment variables "
-                        "to your Claude Desktop config alongside ZOTERO_LOCAL=true:\n"
-                        + _WEB_API_ENV_VARS
+                        "to your Claude Desktop config alongside ZOTERO_LOCAL=true:\n" + _WEB_API_ENV_VARS
                     )
                 else:
                     return f"Failed to create note via local connector (HTTP {resp.status_code}): {resp.text}"
@@ -973,7 +946,7 @@ def create_note(
                 successful = result["success"]
                 if len(successful) > 0:
                     note_key = next(iter(successful.values()))
-                    return f"Successfully created note for \"{parent_title}\"\n\nNote key: {note_key}"
+                    return f'Successfully created note for "{parent_title}"\n\nNote key: {note_key}'
                 else:
                     return f"Note creation response was successful but no key was returned: {result}"
             else:
@@ -986,15 +959,9 @@ def create_note(
 
 @mcp.tool(
     name="zotero_update_note",
-    description="Update the HTML content of an existing Zotero note. Set append=True to concatenate to the existing note; otherwise the note is replaced."
+    description="Update the HTML content of an existing Zotero note. Set append=True to concatenate to the existing note; otherwise the note is replaced.",
 )
-def update_note(
-    item_key: str,
-    note_text: str,
-    append: bool = False,
-    *,
-    ctx: Context
-) -> str:
+def update_note(item_key: str, note_text: str, append: bool = False, *, ctx: Context) -> str:
     """
     Update an existing Zotero note.
 
@@ -1041,13 +1008,9 @@ def update_note(
 
 @mcp.tool(
     name="zotero_delete_note",
-    description="Move a Zotero note to the Trash. Trashed notes are recoverable from Zotero's Trash — empty the Trash in the Zotero UI for permanent deletion."
+    description="Move a Zotero note to the Trash. Trashed notes are recoverable from Zotero's Trash — empty the Trash in the Zotero UI for permanent deletion.",
 )
-def delete_note(
-    item_key: str,
-    *,
-    ctx: Context
-) -> str:
+def delete_note(item_key: str, *, ctx: Context) -> str:
     """
     Move a Zotero note to the Trash.
 
@@ -1078,6 +1041,7 @@ def delete_note(
         # strips the "deleted" field. We send a direct PATCH with {"deleted": 1}
         # to move the note to Zotero's Trash (recoverable by the user).
         from pyzotero.zotero import build_url
+
         url = build_url(
             zot.endpoint,
             f"/{zot.library_type}/{zot.library_id}/items/{item_key}",
@@ -1105,18 +1069,12 @@ def delete_note(
         "page (integer, 1-indexed — page 1 is the first page), "
         "text (exact text to highlight), color (hex, default yellow #ffd400), "
         "comment (optional note on the highlight). "
-        "Requires PyMuPDF: pip install \"zotero-mcp-server[pdf] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1\""
-    )
+        'Requires PyMuPDF: pip install "zotero-mcp-server[pdf] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1"'
+    ),
 )
 @with_zotero_api_lock
 def create_annotation(
-    attachment_key: str,
-    page: int,
-    text: str,
-    comment: str | None = None,
-    color: str = "#ffd400",
-    *,
-    ctx: Context
+    attachment_key: str, page: int, text: str, comment: str | None = None, color: str = "#ffd400", *, ctx: Context
 ) -> str:
     """
     Create a highlight annotation on a PDF or EPUB attachment.
@@ -1139,9 +1097,9 @@ def create_annotation(
     """
 
     from zotero_mcp.pdf_utils import (
+        build_annotation_position,
         find_text_position,
         get_page_label,
-        build_annotation_position,
         verify_pdf_attachment,
     )
 
@@ -1240,11 +1198,12 @@ def create_annotation(
             # Verify the file is valid
             if file_type == "pdf":
                 if not verify_pdf_attachment(file_path):
-                    return f"Error: Downloaded file is not a valid PDF"
+                    return "Error: Downloaded file is not a valid PDF"
             else:  # epub
                 from zotero_mcp.epub_utils import verify_epub_attachment
+
                 if not verify_epub_attachment(file_path):
-                    return f"Error: Downloaded file is not a valid EPUB"
+                    return "Error: Downloaded file is not a valid EPUB"
 
             # Search for the text and get position data
             search_preview = text[:50] + "..." if len(text) > 50 else text
@@ -1255,14 +1214,15 @@ def create_annotation(
                 position_data = find_text_position(file_path, page, text)
             else:  # epub
                 from zotero_mcp.epub_utils import find_text_in_epub
+
                 position_data = find_text_in_epub(file_path, page, text)
 
             if "error" in position_data:
                 # Build debug info message
                 debug_lines = [
                     f"Error: {position_data['error']}",
-                    f"",
-                    f"Text searched: \"{text[:100]}{'...' if len(text) > 100 else ''}\"",
+                    "",
+                    f'Text searched: "{text[:100]}{"..." if len(text) > 100 else ""}"',
                 ]
 
                 best_score = position_data.get("best_score", 0)
@@ -1286,12 +1246,12 @@ def create_annotation(
                     debug_lines.append("")
                     debug_lines.append("TIP: Copy the exact text from the PDF instead of paraphrasing.")
                 elif best_score > 0:
-                    debug_lines.append(f"")
-                    debug_lines.append(f"Debug info:")
+                    debug_lines.append("")
+                    debug_lines.append("Debug info:")
                     debug_lines.append(f"  Best match score: {best_score:.2f} (too low for suggestion)")
                     if best_match:
                         preview = best_match[:80]
-                        debug_lines.append(f"  Best match text: \"{preview}...\"")
+                        debug_lines.append(f'  Best match text: "{preview}..."')
                     # Handle both PDF (page_found) and EPUB (chapter_found)
                     found_location = position_data.get("page_found") or position_data.get("chapter_found")
                     if found_location:
@@ -1303,13 +1263,15 @@ def create_annotation(
                     debug_lines.append(f"  {location_type.title()}s searched: {searched}")
 
                 if best_score < 0.5:
-                    debug_lines.extend([
-                        "",
-                        "Tips:",
-                        f"- Copy the exact text from the {file_type.upper()} (don't paraphrase)",
-                        "- Try a shorter, unique phrase from the beginning",
-                        f"- Check that the {location_type} number is correct",
-                    ])
+                    debug_lines.extend(
+                        [
+                            "",
+                            "Tips:",
+                            f"- Copy the exact text from the {file_type.upper()} (don't paraphrase)",
+                            "- Try a shorter, unique phrase from the beginning",
+                            f"- Check that the {location_type} number is correct",
+                        ]
+                    )
 
                 return "\n".join(debug_lines)
 
@@ -1319,10 +1281,7 @@ def create_annotation(
                 page_label = get_page_label(file_path, page)
 
                 # Build annotation position JSON for PDF
-                annotation_position = build_annotation_position(
-                    position_data["pageIndex"],
-                    position_data["rects"]
-                )
+                annotation_position = build_annotation_position(position_data["pageIndex"], position_data["rects"])
                 sort_index = position_data["sort_index"]
             else:  # epub
                 # For EPUB: leave pageLabel EMPTY for proper navigation
@@ -1350,7 +1309,7 @@ def create_annotation(
             if page_label:
                 annotation_data["annotationPageLabel"] = page_label
 
-            ctx.info(f"Creating annotation via Web API...")
+            ctx.info("Creating annotation via Web API...")
 
             # Create the annotation using web client
             result = web_client.create_items([annotation_data])
@@ -1362,8 +1321,8 @@ def create_annotation(
                     annotation_key = list(successful.values())[0]
                     location_label = "Page" if file_type == "pdf" else "Chapter"
                     response = [
-                        f"Successfully created highlight annotation",
-                        f"",
+                        "Successfully created highlight annotation",
+                        "",
                         f"**Annotation Key:** {annotation_key}",
                         f"**{location_label}:** {page_label}",
                     ]
@@ -1371,11 +1330,13 @@ def create_annotation(
                     if file_type == "epub":
                         chapter_found = position_data.get("chapter_found", page)
                         if chapter_found != page:
-                            response.append(f"**Note:** Text was found in chapter {chapter_found} (you specified {page})")
+                            response.append(
+                                f"**Note:** Text was found in chapter {chapter_found} (you specified {page})"
+                            )
                         chapter_href = position_data.get("chapter_href", "")
                         if chapter_href:
                             response.append(f"**Section:** {chapter_href}")
-                    response.append(f"**Text:** \"{text[:100]}{'...' if len(text) > 100 else ''}\"")
+                    response.append(f'**Text:** "{text[:100]}{"..." if len(text) > 100 else ""}"')
                     if comment:
                         response.append(f"**Comment:** {comment}")
                     response.append(f"**Color:** {color}")
@@ -1393,7 +1354,7 @@ def create_annotation(
 
 @mcp.tool(
     name="zotero_create_area_annotation",
-    description="Create a PDF area/image annotation using normalized page coordinates."
+    description="Create a PDF area/image annotation using normalized page coordinates.",
 )
 def create_area_annotation(
     attachment_key: str,
@@ -1405,7 +1366,7 @@ def create_area_annotation(
     comment: str | None = None,
     color: str = "#ffd400",
     *,
-    ctx: Context
+    ctx: Context,
 ) -> str:
     """
     Create an area/image annotation on a PDF attachment.

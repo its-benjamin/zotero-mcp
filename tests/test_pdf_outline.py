@@ -3,15 +3,12 @@
 import sys
 import types
 
-import pytest
-
-from conftest import DummyContext, FakeZotero
 from zotero_mcp import server
-
 
 # ---------------------------------------------------------------------------
 # Helpers: fake fitz module and document
 # ---------------------------------------------------------------------------
+
 
 class FakeDocument:
     """Simulates a fitz.Document with a get_toc() method."""
@@ -49,6 +46,7 @@ def _patch_fitz(monkeypatch, toc=None):
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 def _pdf_child(key="ATTACH01", filename="paper.pdf"):
     """Return an attachment dict that looks like a PDF child item."""
     return {
@@ -78,6 +76,7 @@ def _note_child(key="NOTE01"):
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestGetPdfOutlineHappyPath:
     """Happy-path: item with a PDF child, TOC returned as markdown."""
@@ -144,8 +143,10 @@ class TestEmptyToc:
 
         result = server.get_pdf_outline(item_key="ITEM01", ctx=dummy_ctx)
 
-        assert "does not contain a table of contents" in result.lower() or \
-               "does not contain a table of contents/outline" in result.lower()
+        assert (
+            "does not contain a table of contents" in result.lower()
+            or "does not contain a table of contents/outline" in result.lower()
+        )
 
 
 class TestNoPdfAttachment:

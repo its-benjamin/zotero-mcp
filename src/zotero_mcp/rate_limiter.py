@@ -16,10 +16,11 @@ from email.utils import parsedate_to_datetime
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
 
 DEFAULT_PROVIDER_LIMITS: dict[str, tuple[float, float]] = {
     # provider: (requests per window, window seconds)
-    "zotero": (2, 1),
+    "zotero": (6, 1),
     "crossref": (1, 1),
     "arxiv": (1, 3),
     "unpaywall": (1, 1),
@@ -28,7 +29,9 @@ DEFAULT_PROVIDER_LIMITS: dict[str, tuple[float, float]] = {
     "scite": (1, 1),
     "openai": (5, 1),
     "gemini": (1, 1),
-    "voyage": (3, 1),
+    # Voyage free-tier projects are limited to 3 RPM. Users on paid tiers can
+    # raise this with ZOTERO_MCP_RATE_VOYAGE_REQUESTS / WINDOW_SECONDS.
+    "voyage": (3, 60),
 }
 
 
@@ -85,6 +88,36 @@ class ProviderRateLimiter:
 
 _LIMITERS: dict[str, ProviderRateLimiter] = {}
 _LIMITERS_LOCK = threading.Lock()
+_THREAD_LOCAL = threading.local()
+_ORIGINAL_REQUESTS_GET = requests.get
+_ORIGINAL_REQUESTS_POST = requests.post
+
+
+def _get_thread_session(provider: str) -> requests.Session:
+    sessions = getattr(_THREAD_LOCAL, "sessions", None)
+    if sessions is None:
+        sessions = {}
+        _THREAD_LOCAL.sessions = sessions
+    session = sessions.get(provider)
+    if session is None:
+        session = requests.Session()
+        adapter = HTTPAdapter(pool_connections=16, pool_maxsize=16)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        sessions[provider] = session
+    return session
+
+
+def _session_get(provider: str, url: str, **kwargs: Any) -> requests.Response:
+    if requests.get is not _ORIGINAL_REQUESTS_GET:
+        return requests.get(url, **kwargs)
+    return _get_thread_session(provider).get(url, **kwargs)
+
+
+def _session_post(provider: str, url: str, **kwargs: Any) -> requests.Response:
+    if requests.post is not _ORIGINAL_REQUESTS_POST:
+        return requests.post(url, **kwargs)
+    return _get_thread_session(provider).post(url, **kwargs)
 
 
 def get_limiter(provider: str) -> ProviderRateLimiter:
@@ -129,17 +162,17 @@ def _call_with_rate_limit(
             limiter.backoff(backoff_seconds)
         if status_code not in (429, 503) or attempt >= max_retries:
             return response
-        wait = backoff_seconds if backoff_seconds is not None else min(60.0, (2 ** attempt) + random.random())
+        wait = backoff_seconds if backoff_seconds is not None else min(60.0, (2**attempt) + random.random())
         limiter.backoff(wait)
         attempt += 1
 
 
 def rate_limited_get(provider: str, url: str, **kwargs: Any) -> requests.Response:
-    return _call_with_rate_limit(provider, requests.get, url, **kwargs)
+    return _call_with_rate_limit(provider, _session_get, provider, url, **kwargs)
 
 
 def rate_limited_post(provider: str, url: str, **kwargs: Any) -> requests.Response:
-    return _call_with_rate_limit(provider, requests.post, url, **kwargs)
+    return _call_with_rate_limit(provider, _session_post, provider, url, **kwargs)
 
 
 class RateLimitedZotero:

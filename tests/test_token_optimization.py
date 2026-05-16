@@ -1,16 +1,15 @@
 """Tests for token usage optimization fixes (A through F)."""
 
 import pytest
-from typing import Literal
+from conftest import DummyContext, FakeZotero
 
-from conftest import DummyContext, FakeZotero, _FakeResponse
 from zotero_mcp import server
 from zotero_mcp.tools import _helpers
-
 
 # ---------------------------------------------------------------------------
 # Helpers: collection items fixture with children
 # ---------------------------------------------------------------------------
+
 
 def _make_parent(key, title, date="2024", collections=None, abstract=""):
     return {
@@ -72,8 +71,7 @@ class CollectionFakeZotero(FakeZotero):
         return {"data": {"name": "Test Collection"}}
 
     def collection_items(self, key, **kwargs):
-        return [it for it in self._all_items
-                if key in it.get("data", {}).get("collections", [])]
+        return [it for it in self._all_items if key in it.get("data", {}).get("collections", [])]
 
 
 @pytest.fixture
@@ -99,11 +97,13 @@ def dummy_ctx():
 # Test Fix C: detail parameter
 # ---------------------------------------------------------------------------
 
+
 class TestDetailParameter:
     def test_keys_only_minimal(self, monkeypatch, coll_zot, dummy_ctx):
         """keys_only returns just key | title (date) [flags]."""
         monkeypatch.setattr(server, "get_zotero_client", lambda: coll_zot)
         from zotero_mcp.tools.retrieval import get_collection_items
+
         monkeypatch.setattr("zotero_mcp.tools.retrieval._client.get_zotero_client", lambda: coll_zot)
 
         result = get_collection_items(collection_key="COL1", detail="keys_only", ctx=dummy_ctx)
@@ -155,6 +155,7 @@ class TestDetailParameter:
 # Test Fix D: Attachment summary
 # ---------------------------------------------------------------------------
 
+
 class TestAttachmentSummary:
     def test_pdf_indicator_in_keys_only(self, monkeypatch, coll_zot, dummy_ctx):
         """keys_only mode shows [PDF] flag when item has a PDF."""
@@ -165,7 +166,7 @@ class TestAttachmentSummary:
 
         # P1 has a PDF attachment
         lines = result.split("\n")
-        p1_line = [l for l in lines if "P1" in l][0]
+        p1_line = [line for line in lines if "P1" in line][0]
         assert "PDF" in p1_line
 
     def test_notes_indicator(self, monkeypatch, coll_zot, dummy_ctx):
@@ -176,7 +177,7 @@ class TestAttachmentSummary:
         result = get_collection_items(collection_key="COL1", detail="keys_only", ctx=dummy_ctx)
 
         lines = result.split("\n")
-        p1_line = [l for l in lines if "P1" in l][0]
+        p1_line = [line for line in lines if "P1" in line][0]
         assert "Notes" in p1_line
 
     def test_attachment_info_in_summary(self, monkeypatch, coll_zot, dummy_ctx):
@@ -195,6 +196,7 @@ class TestAttachmentSummary:
 # Test Fix E: Batch get_item_children
 # ---------------------------------------------------------------------------
 
+
 class TestBatchChildren:
     def test_multiple_items_grouped(self, monkeypatch, dummy_ctx):
         """Batch children returns results grouped by parent item."""
@@ -203,14 +205,21 @@ class TestBatchChildren:
             def items(self, **kwargs):
                 item_key = kwargs.get("itemKey", "")
                 keys = item_key.split(",") if item_key else []
-                return [
-                    {"key": k, "data": {"title": f"Paper {k}", "itemType": "journalArticle"}}
-                    for k in keys
-                ]
+                return [{"key": k, "data": {"title": f"Paper {k}", "itemType": "journalArticle"}} for k in keys]
 
             def children(self, key, **kwargs):
                 if key == "K1":
-                    return [{"key": "C1", "data": {"itemType": "attachment", "contentType": "application/pdf", "filename": "paper.pdf", "linkMode": "imported_file"}}]
+                    return [
+                        {
+                            "key": "C1",
+                            "data": {
+                                "itemType": "attachment",
+                                "contentType": "application/pdf",
+                                "filename": "paper.pdf",
+                                "linkMode": "imported_file",
+                            },
+                        }
+                    ]
                 return []
 
         zot = BatchZotero()
@@ -230,6 +239,7 @@ class TestBatchChildren:
         class SimpleZotero(FakeZotero):
             def items(self, **kwargs):
                 return [{"key": "X1", "data": {"title": "Test", "itemType": "journalArticle"}}]
+
             def children(self, key, **kwargs):
                 return []
 
@@ -244,6 +254,7 @@ class TestBatchChildren:
 # ---------------------------------------------------------------------------
 # Test Fix F: Token estimation
 # ---------------------------------------------------------------------------
+
 
 class TestTokenEstimation:
     def test_warning_for_large_response(self):
@@ -269,6 +280,7 @@ class TestTokenEstimation:
 # ---------------------------------------------------------------------------
 # Test Fix B: Multi-word collection search
 # ---------------------------------------------------------------------------
+
 
 class TestMultiWordSearch:
     def test_multi_word_matches(self, monkeypatch, dummy_ctx):
@@ -316,6 +328,7 @@ class TestMultiWordSearch:
 # Additional edge case and error handling tests
 # ---------------------------------------------------------------------------
 
+
 class TestTokenBoundary:
     """Boundary tests for the 5K token (~20K char) threshold."""
 
@@ -341,6 +354,7 @@ class TestCollectionItemsEdgeCases:
         class EmptyZotero(FakeZotero):
             def collection(self, key, **kwargs):
                 return {"data": {"name": "Empty Collection"}}
+
             def collection_items(self, key, **kwargs):
                 return []
 
@@ -373,8 +387,10 @@ class TestBatchChildrenEdgeCases:
                 keys = item_key.split(",") if item_key else []
                 return [
                     {"key": k, "data": {"title": f"Paper {k}", "itemType": "journalArticle"}}
-                    for k in keys if k != "BAD"
+                    for k in keys
+                    if k != "BAD"
                 ]
+
             def children(self, key, **kwargs):
                 if key == "BAD":
                     raise Exception("Item not found")
@@ -405,10 +421,8 @@ class TestBatchChildrenEdgeCases:
             def items(self, **kwargs):
                 item_key = kwargs.get("itemKey", "")
                 keys = item_key.split(",") if item_key else []
-                return [
-                    {"key": k, "data": {"title": f"Paper {k}", "itemType": "journalArticle"}}
-                    for k in keys
-                ]
+                return [{"key": k, "data": {"title": f"Paper {k}", "itemType": "journalArticle"}} for k in keys]
+
             def children(self, key, **kwargs):
                 return []
 
@@ -427,20 +441,24 @@ class TestBuildAttachmentExtra:
 
     def test_none_input(self):
         from zotero_mcp.tools.retrieval import _build_attachment_extra
+
         assert _build_attachment_extra(None) is None
 
     def test_empty_dict(self):
         from zotero_mcp.tools.retrieval import _build_attachment_extra
+
         assert _build_attachment_extra({}) is None
 
     def test_pdf_only(self):
         from zotero_mcp.tools.retrieval import _build_attachment_extra
+
         result = _build_attachment_extra({"has_pdf": True, "attachment_count": 1, "has_notes": False})
         assert result is not None
         assert "PDF" in result["Attachments"]
 
     def test_pluralization(self):
         from zotero_mcp.tools.retrieval import _build_attachment_extra
+
         result1 = _build_attachment_extra({"has_pdf": False, "attachment_count": 1, "has_notes": False})
         result2 = _build_attachment_extra({"has_pdf": False, "attachment_count": 2, "has_notes": False})
         assert "1 attachment" in result1["Attachments"]
@@ -450,6 +468,7 @@ class TestBuildAttachmentExtra:
 # ---------------------------------------------------------------------------
 # Race condition: unknown / not-yet-propagated collection key
 # ---------------------------------------------------------------------------
+
 
 class RacyFakeZotero(FakeZotero):
     """Simulates the Zotero web API's behavior for an unknown or
@@ -469,9 +488,7 @@ class RacyFakeZotero(FakeZotero):
 
 
 class TestCollectionItemsRace:
-    def test_unknown_collection_returns_error_not_library_items(
-        self, monkeypatch, dummy_ctx
-    ):
+    def test_unknown_collection_returns_error_not_library_items(self, monkeypatch, dummy_ctx):
         """When ``zot.collection(key)`` fails, the tool must return a
         clear error instead of falling through to ``collection_items()``,
         which may return library-wide items for an unknown key."""
@@ -480,14 +497,10 @@ class TestCollectionItemsRace:
             _make_parent("X2", "Unrelated Paper Two", collections=["OTHER"]),
         ]
         zot = RacyFakeZotero(library_items=library)
-        monkeypatch.setattr(
-            "zotero_mcp.tools.retrieval._client.get_zotero_client", lambda: zot
-        )
+        monkeypatch.setattr("zotero_mcp.tools.retrieval._client.get_zotero_client", lambda: zot)
         from zotero_mcp.tools.retrieval import get_collection_items
 
-        result = get_collection_items(
-            collection_key="FRESHKEY", detail="keys_only", ctx=dummy_ctx
-        )
+        result = get_collection_items(collection_key="FRESHKEY", detail="keys_only", ctx=dummy_ctx)
 
         assert "not found" in result.lower() or "not yet accessible" in result.lower()
         assert "FRESHKEY" in result

@@ -1,10 +1,8 @@
 """Unit tests for the PDF attachment cascade (_try_unpaywall, _try_arxiv_from_crossref,
 _try_semantic_scholar, _try_pmc, _download_and_attach_pdf, _try_attach_oa_pdf)."""
 
-import json
-
-import pytest
 import requests
+from conftest import FakeZotero
 
 from zotero_mcp.server import (
     _download_and_attach_pdf,
@@ -14,18 +12,16 @@ from zotero_mcp.server import (
     _try_semantic_scholar,
     _try_unpaywall,
 )
-from conftest import DummyContext, FakeZotero
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 class _FakeHTTPResponse:
     """Minimal requests.Response stand-in."""
 
-    def __init__(self, status_code=200, json_data=None, content=b"",
-                 headers=None):
+    def __init__(self, status_code=200, json_data=None, content=b"", headers=None):
         self.status_code = status_code
         self._json = json_data
         self.content = content
@@ -57,8 +53,8 @@ class _AttachZotero(FakeZotero):
 # _try_unpaywall
 # ---------------------------------------------------------------------------
 
-class TestTryUnpaywall:
 
+class TestTryUnpaywall:
     def test_unpaywall_best_location(self, monkeypatch, dummy_ctx):
         """best_oa_location has url_for_pdf -> returns that URL."""
         payload = {
@@ -120,29 +116,17 @@ class TestTryUnpaywall:
 # _try_arxiv_from_crossref
 # ---------------------------------------------------------------------------
 
-class TestTryArxivFromCrossref:
 
+class TestTryArxivFromCrossref:
     def test_arxiv_from_crossref_doi_format(self, dummy_ctx):
         """relation has-preprint with id-type 'doi' containing arXiv DOI."""
-        metadata = {
-            "relation": {
-                "has-preprint": [
-                    {"id-type": "doi", "id": "10.48550/arXiv.2307.02743"}
-                ]
-            }
-        }
+        metadata = {"relation": {"has-preprint": [{"id-type": "doi", "id": "10.48550/arXiv.2307.02743"}]}}
         result = _try_arxiv_from_crossref(metadata, dummy_ctx)
         assert result == "https://arxiv.org/pdf/2307.02743.pdf"
 
     def test_arxiv_from_crossref_arxiv_type(self, dummy_ctx):
         """relation has-preprint with id-type 'arxiv' and bare arXiv id."""
-        metadata = {
-            "relation": {
-                "has-preprint": [
-                    {"id-type": "arxiv", "id": "2307.02743"}
-                ]
-            }
-        }
+        metadata = {"relation": {"has-preprint": [{"id-type": "arxiv", "id": "2307.02743"}]}}
         result = _try_arxiv_from_crossref(metadata, dummy_ctx)
         assert result == "https://arxiv.org/pdf/2307.02743.pdf"
 
@@ -157,13 +141,11 @@ class TestTryArxivFromCrossref:
 # _try_semantic_scholar
 # ---------------------------------------------------------------------------
 
-class TestTrySemanticScholar:
 
+class TestTrySemanticScholar:
     def test_semantic_scholar_has_pdf(self, monkeypatch, dummy_ctx):
         """S2 returns openAccessPdf with url -> returns that URL."""
-        payload = {
-            "openAccessPdf": {"url": "https://s2.example.com/paper.pdf"}
-        }
+        payload = {"openAccessPdf": {"url": "https://s2.example.com/paper.pdf"}}
 
         def fake_get(url, **kwargs):
             return _FakeHTTPResponse(200, json_data=payload)
@@ -188,8 +170,8 @@ class TestTrySemanticScholar:
 # _try_pmc
 # ---------------------------------------------------------------------------
 
-class TestTryPmc:
 
+class TestTryPmc:
     def test_pmc_found(self, monkeypatch, dummy_ctx):
         """NCBI converter returns pmcid -> returns PMC PDF URL."""
         payload = {"records": [{"pmcid": "PMC1234567"}]}
@@ -217,21 +199,21 @@ class TestTryPmc:
 # _download_and_attach_pdf
 # ---------------------------------------------------------------------------
 
-class TestDownloadAndAttachPdf:
 
+class TestDownloadAndAttachPdf:
     def test_download_content_type_check(self, monkeypatch, dummy_ctx):
         """Response with text/html content-type -> file NOT attached."""
         zot = _AttachZotero()
 
         def fake_get(url, **kwargs):
             return _FakeHTTPResponse(
-                200, content=b"<html>Not a PDF</html>",
+                200,
+                content=b"<html>Not a PDF</html>",
                 headers={"Content-Type": "text/html"},
             )
 
         monkeypatch.setattr(requests, "get", fake_get)
-        result = _download_and_attach_pdf(zot, "ITEM1", "https://x.com/f.pdf",
-                                          "10.1234/test", dummy_ctx)
+        result = _download_and_attach_pdf(zot, "ITEM1", "https://x.com/f.pdf", "10.1234/test", dummy_ctx)
         assert result is False
         assert len(zot.attachments) == 0
 
@@ -242,13 +224,13 @@ class TestDownloadAndAttachPdf:
 
         def fake_get(url, **kwargs):
             return _FakeHTTPResponse(
-                200, content=tiny_content,
+                200,
+                content=tiny_content,
                 headers={"Content-Type": "application/pdf"},
             )
 
         monkeypatch.setattr(requests, "get", fake_get)
-        result = _download_and_attach_pdf(zot, "ITEM1", "https://x.com/f.pdf",
-                                          "10.1234/test", dummy_ctx)
+        result = _download_and_attach_pdf(zot, "ITEM1", "https://x.com/f.pdf", "10.1234/test", dummy_ctx)
         assert result is False
         assert len(zot.attachments) == 0
 
@@ -257,8 +239,8 @@ class TestDownloadAndAttachPdf:
 # _try_attach_oa_pdf (full cascade)
 # ---------------------------------------------------------------------------
 
-class TestTryAttachOaPdf:
 
+class TestTryAttachOaPdf:
     def test_cascade_order(self, monkeypatch, dummy_ctx):
         """All sources return None except PMC (last) -> cascade reaches it."""
         zot = _AttachZotero()
@@ -270,17 +252,24 @@ class TestTryAttachOaPdf:
             call_log.append(url)
             # Unpaywall
             if "unpaywall.org" in url:
-                return _FakeHTTPResponse(200, json_data={
-                    "best_oa_location": None, "oa_locations": [],
-                })
+                return _FakeHTTPResponse(
+                    200,
+                    json_data={
+                        "best_oa_location": None,
+                        "oa_locations": [],
+                    },
+                )
             # Semantic Scholar
             if "semanticscholar.org" in url:
                 return _FakeHTTPResponse(200, json_data={"openAccessPdf": None})
             # NCBI ID converter -> return a PMCID
             if "ncbi.nlm.nih.gov/tools/idconv" in url:
-                return _FakeHTTPResponse(200, json_data={
-                    "records": [{"pmcid": "PMC9999999"}],
-                })
+                return _FakeHTTPResponse(
+                    200,
+                    json_data={
+                        "records": [{"pmcid": "PMC9999999"}],
+                    },
+                )
             # Actual PDF download from PMC URL
             if "pmc.ncbi.nlm.nih.gov/articles" in url:
                 return _FakeHTTPResponse(
@@ -291,8 +280,7 @@ class TestTryAttachOaPdf:
             return _FakeHTTPResponse(404)
 
         monkeypatch.setattr(requests, "get", fake_get)
-        result = _try_attach_oa_pdf(zot, "ITEM1", doi, dummy_ctx,
-                                    crossref_metadata=None)
+        result = _try_attach_oa_pdf(zot, "ITEM1", doi, dummy_ctx, crossref_metadata=None)
         assert "PDF attached" in result
         assert "PubMed Central" in result
         assert len(zot.attachments) == 1
@@ -304,9 +292,13 @@ class TestTryAttachOaPdf:
         def fake_get(url, **kwargs):
             # Every API returns empty/no-match responses
             if "unpaywall.org" in url:
-                return _FakeHTTPResponse(200, json_data={
-                    "best_oa_location": None, "oa_locations": [],
-                })
+                return _FakeHTTPResponse(
+                    200,
+                    json_data={
+                        "best_oa_location": None,
+                        "oa_locations": [],
+                    },
+                )
             if "semanticscholar.org" in url:
                 return _FakeHTTPResponse(200, json_data={"openAccessPdf": None})
             if "ncbi.nlm.nih.gov" in url:
@@ -314,7 +306,6 @@ class TestTryAttachOaPdf:
             return _FakeHTTPResponse(404)
 
         monkeypatch.setattr(requests, "get", fake_get)
-        result = _try_attach_oa_pdf(zot, "ITEM1", "10.1234/nope", dummy_ctx,
-                                    crossref_metadata=None)
+        result = _try_attach_oa_pdf(zot, "ITEM1", "10.1234/nope", dummy_ctx, crossref_metadata=None)
         assert "no open-access PDF found" in result
         assert len(zot.attachments) == 0

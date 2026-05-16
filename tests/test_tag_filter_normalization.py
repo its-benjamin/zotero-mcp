@@ -7,8 +7,6 @@ which agents sometimes confuse with the filter shape). pyzotero's `tag=`
 parameter wants list[str] — the normalizer collapses all inputs to that.
 """
 
-import pytest
-
 from zotero_mcp.tools._helpers import _normalize_tag_filter
 
 
@@ -29,9 +27,7 @@ class TestNormalizeTagFilter:
     def test_list_of_dicts_with_tag_key(self):
         """The #237 primary case — LLM sends Zotero's stored-tag dict shape."""
         assert _normalize_tag_filter([{"tag": "FIXME"}]) == ["FIXME"]
-        assert _normalize_tag_filter(
-            [{"tag": "a"}, {"tag": "b"}]
-        ) == ["a", "b"]
+        assert _normalize_tag_filter([{"tag": "a"}, {"tag": "b"}]) == ["a", "b"]
 
     def test_list_of_dicts_with_name_key(self):
         """Accept {'name': 'X'} as a fallback shape some clients emit."""
@@ -51,9 +47,7 @@ class TestNormalizeTagFilter:
 
     def test_mixed_list(self):
         """Heterogeneous list: dicts and bare strings interleaved."""
-        assert _normalize_tag_filter(
-            [{"tag": "a"}, "b", {"name": "c"}]
-        ) == ["a", "b", "c"]
+        assert _normalize_tag_filter([{"tag": "a"}, "b", {"name": "c"}]) == ["a", "b", "c"]
 
     def test_empty_dict_ignored(self):
         assert _normalize_tag_filter([{}]) == []
@@ -105,8 +99,9 @@ class TestSearchItemsIntegration:
 
     def test_search_items_accepts_dict_shape_tag(self, monkeypatch):
         """The exact failing call from the #237 bug report."""
-        from zotero_mcp import server
         from conftest import DummyContext
+
+        from zotero_mcp import server
 
         fake = _SearchableFake()
         self._patch(monkeypatch, fake)
@@ -123,8 +118,9 @@ class TestSearchItemsIntegration:
 
     def test_search_items_accepts_json_string_tag(self, monkeypatch):
         """The stringified form the MCP serialization layer produces."""
-        from zotero_mcp import server
         from conftest import DummyContext
+
+        from zotero_mcp import server
 
         fake = _SearchableFake()
         self._patch(monkeypatch, fake)
@@ -139,8 +135,9 @@ class TestSearchItemsIntegration:
 
     def test_search_items_accepts_canonical_list_of_strings(self, monkeypatch):
         """Regression guard: canonical shape must still work."""
-        from zotero_mcp import server
         from conftest import DummyContext
+
+        from zotero_mcp import server
 
         fake = _SearchableFake()
         self._patch(monkeypatch, fake)
@@ -155,8 +152,9 @@ class TestSearchItemsIntegration:
 
     def test_search_items_no_tag(self, monkeypatch):
         """Regression guard: tag omitted entirely should not pass tag= to API."""
-        from zotero_mcp import server
         from conftest import DummyContext
+
+        from zotero_mcp import server
 
         fake = _SearchableFake()
         self._patch(monkeypatch, fake)

@@ -9,23 +9,22 @@ the tool functions (create_collection, search_collections, manage_collections)
 are added to server.py.
 """
 
-import json
 import pytest
-
 from conftest import DummyContext, FakeZotero
-from zotero_mcp import server
 
+from zotero_mcp import server
 
 # ---------------------------------------------------------------------------
 # Extended FakeZotero for collection tests
 # ---------------------------------------------------------------------------
+
 
 class FakeZoteroCollections(FakeZotero):
     """FakeZotero with tracking for collection write operations."""
 
     def __init__(self):
         super().__init__()
-        self.added_to_collections = []   # (collection_key, items)
+        self.added_to_collections = []  # (collection_key, items)
         self.removed_from_collections = []  # (collection_key, item)
         self.created_collections = []
 
@@ -56,6 +55,7 @@ class _FakeResponse:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def fake_zot():
@@ -104,17 +104,13 @@ def ctx():
 
 def _patch_hybrid(monkeypatch, read_zot, write_zot):
     """Patch _get_write_client to return the given read/write pair."""
-    monkeypatch.setattr(
-        "zotero_mcp.tools._helpers._get_write_client", lambda ctx: (read_zot, write_zot)
-    )
+    monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (read_zot, write_zot))
 
 
 def _patch_web_only(monkeypatch, fake_zot):
     """Patch for web-only mode: same client for read and write."""
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake_zot)
-    monkeypatch.setattr(
-        "zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake_zot, fake_zot)
-    )
+    monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake_zot, fake_zot))
 
 
 def _patch_local_only(monkeypatch, fake_zot):
@@ -381,7 +377,7 @@ class TestManageCollections:
         """add_to passed as a JSON string should be normalized."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        result = server.manage_collections(
+        server.manage_collections(
             item_keys=["ITEM0001"],
             add_to='["ABC00002", "ABC00003"]',
             ctx=ctx,
@@ -393,7 +389,7 @@ class TestManageCollections:
         """remove_from passed as a JSON string should be normalized."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        result = server.manage_collections(
+        server.manage_collections(
             item_keys=["ITEM0001"],
             remove_from='["ABC00001"]',
             ctx=ctx,
@@ -405,7 +401,7 @@ class TestManageCollections:
         """A single item_key string (not a list) should be normalized to a list."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        result = server.manage_collections(
+        server.manage_collections(
             item_keys="ITEM0001",
             add_to=["ABC00002"],
             ctx=ctx,
@@ -431,7 +427,7 @@ class TestManageCollections:
 
         _patch_hybrid(monkeypatch, read_zot, write_zot)
 
-        result = server.manage_collections(
+        server.manage_collections(
             item_keys=["ITEM0001"],
             add_to=["COL001"],
             ctx=ctx,
@@ -468,7 +464,7 @@ class TestManageCollections:
         The implementation uses _normalize_str_list_input, not _resolve_collection_names."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        result = server.manage_collections(
+        server.manage_collections(
             item_keys=["ITEM0001"],
             add_to=["NLP Papers"],
             ctx=ctx,

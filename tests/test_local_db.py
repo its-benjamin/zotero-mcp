@@ -1,8 +1,6 @@
 from pathlib import Path
 
-import pytest
-
-from zotero_mcp.local_db import ZoteroItem, LocalZoteroReader
+from zotero_mcp.local_db import LocalZoteroReader, ZoteroItem
 
 
 class FakeLocalZoteroReader(LocalZoteroReader):
@@ -114,9 +112,7 @@ class TestResolveAttachmentPath:
         base_dir.mkdir()
         # Write a prefs.js with baseAttachmentPath
         prefs = tmp_path / "prefs.js"
-        prefs.write_text(
-            f'user_pref("extensions.zotero.baseAttachmentPath", "{base_dir}");\n'
-        )
+        prefs.write_text(f'user_pref("extensions.zotero.baseAttachmentPath", "{base_dir}");\n')
         result = reader._resolve_attachment_path("X", "attachments:subfolder/paper.pdf")
         assert result == base_dir / "subfolder" / "paper.pdf"
 
@@ -175,9 +171,12 @@ class TestGetAttachmentPaths:
         assert reader.get_attachment_paths("MISSING") == []
 
     def test_multiple_attachments(self, tmp_path):
-        reader = self._make_reader(tmp_path, [
-            ("A", "storage:a.pdf", "application/pdf"),
-            ("B", "storage:b.html", "text/html"),
-        ])
+        reader = self._make_reader(
+            tmp_path,
+            [
+                ("A", "storage:a.pdf", "application/pdf"),
+                ("B", "storage:b.html", "text/html"),
+            ],
+        )
         result = reader.get_attachment_paths("PARENT")
         assert [a["key"] for a in result] == ["A", "B"]

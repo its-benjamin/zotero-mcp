@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-05-16
+
+### Added
+- **CI lint job** — `ruff check` and `ruff format --check` run before tests in GitHub Actions.
+- **Python 3.13 support** — added to CI test matrix.
+- **`py.typed` marker** — package now declares PEP 561 typing support.
+- **CONTRIBUTING.md** — developer setup, local checks, and PR guidelines.
+- **GitHub issue templates** — structured bug report and feature request forms.
+- **Startup connection check** — `get_zotero_client()` now raises a clear `ConnectionError` when `ZOTERO_LOCAL=true` and Zotero desktop is not reachable on `localhost:23119`.
+
+### Fixed
+- Resolved all 143 ruff lint errors: unused imports/variables, ambiguous variable names, unsorted imports, f-strings without placeholders, missing newlines.
+- Fixed indentation corruption in `tools/retrieval.py` and `tools/write.py`.
+
+### Changed
+- Applied `ruff format` across entire codebase for consistent style.
+- Version bump to 0.3.3.
+
 ## [0.2.2] - 2026-03-26
 
 ### Added

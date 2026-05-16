@@ -17,12 +17,12 @@ from __future__ import annotations
 
 import logging
 
-from zotero_mcp._context import Context
 from zotero_mcp import client as _client
-from zotero_mcp.client import with_zotero_api_lock
 from zotero_mcp import scite_client as _scite
 from zotero_mcp import utils as _utils
 from zotero_mcp._app import mcp
+from zotero_mcp._context import Context
+from zotero_mcp.client import with_zotero_api_lock
 from zotero_mcp.tools import _helpers
 
 logger = logging.getLogger(__name__)
@@ -164,10 +164,7 @@ def enrich_item(
             output.append(f"- **Supporting:** {tally.get('supporting', 0)}")
             output.append(f"- **Contrasting:** {tally.get('contradicting', 0)}")
             output.append(f"- **Mentioning:** {tally.get('mentioning', 0)}")
-            output.append(
-                f"- **Total citing publications:** "
-                f"{tally.get('citingPublications', 'N/A')}"
-            )
+            output.append(f"- **Total citing publications:** {tally.get('citingPublications', 'N/A')}")
             output.append("")
 
         # Editorial notices
@@ -239,13 +236,9 @@ def enrich_search(
         for i, item in enumerate(results, 1):
             doi = _extract_doi(item)
             extra = enrichment.get(doi, {}) if doi else {}
-            output.extend(
-                _utils.format_item_result(item, index=i, extra_fields=extra)
-            )
+            output.extend(_utils.format_item_result(item, index=i, extra_fields=extra))
 
-        items_with_scite = sum(
-            1 for item in results if _extract_doi(item) in enrichment
-        )
+        items_with_scite = sum(1 for item in results if _extract_doi(item) in enrichment)
         output.append(
             f"---\n*Scite data shown for {items_with_scite}/{len(results)} items "
             f"— powered by [scite.ai](https://scite.ai).*"
@@ -285,9 +278,7 @@ def check_retractions(
             keys = _helpers._resolve_collection_names(zot, [collection], ctx)
             if not keys:
                 return f"Collection '{collection}' not found"
-            items = zot.collection_items(
-                keys[0], limit=limit_int, itemType="-attachment"
-            )
+            items = zot.collection_items(keys[0], limit=limit_int, itemType="-attachment")
         elif tag:
             ctx.info(f"Checking items tagged '{tag}' for retractions")
             zot.add_parameters(tag=tag, itemType="-attachment", limit=limit_int)
@@ -329,15 +320,11 @@ def check_retractions(
                 flagged.append((item, notices))
 
         if not flagged:
-            return (
-                f"All clear! Checked {len(doi_items)} items with DOIs — "
-                "no retractions or editorial notices found."
-            )
+            return f"All clear! Checked {len(doi_items)} items with DOIs — no retractions or editorial notices found."
 
         output = [
             "# Editorial Notice Alerts",
-            f"Found **{len(flagged)}** item(s) with editorial notices "
-            f"(out of {len(doi_items)} checked):",
+            f"Found **{len(flagged)}** item(s) with editorial notices (out of {len(doi_items)} checked):",
             "",
         ]
 
@@ -354,9 +341,7 @@ def check_retractions(
                 output.append(f"- **{ntype}**: https://doi.org/{source}")
             output.append("")
 
-        output.append(
-            "---\n*Powered by [scite.ai](https://scite.ai).*"
-        )
+        output.append("---\n*Powered by [scite.ai](https://scite.ai).*")
 
         return "\n".join(output)
 
