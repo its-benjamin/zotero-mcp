@@ -1399,7 +1399,7 @@ def create_area_annotation(
 
         values = {"x": x, "y": y, "width": width, "height": height}
         for name, value in values.items():
-            if not isinstance(value, (int, float)) or not isfinite(value):
+            if not isinstance(value, int | float) or not isfinite(value):
                 return f"Error: {name} must be a finite number"
 
         if x < 0 or x > 1:

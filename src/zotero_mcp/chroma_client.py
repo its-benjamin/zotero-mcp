@@ -1057,12 +1057,10 @@ class ChromaClient:
             # its embed_query returns chunked results, not a single vector.
             _is_custom_ef = isinstance(
                 self.embedding_function,
-                (
-                    OpenAIEmbeddingFunction,
-                    GeminiEmbeddingFunction,
-                    VoyageEmbeddingFunction,
-                    HuggingFaceEmbeddingFunction,
-                ),
+                OpenAIEmbeddingFunction
+                | GeminiEmbeddingFunction
+                | VoyageEmbeddingFunction
+                | HuggingFaceEmbeddingFunction,
             )
             if _is_custom_ef and hasattr(self.embedding_function, "embed_query") and query_texts:
                 query_embeddings = []
