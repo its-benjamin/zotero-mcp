@@ -20,11 +20,28 @@ jobs:
           python-version: "3.12"
           cache: pip
       - name: Install ruff
-        run: python -m pip install ruff==0.9.10
+        run: python -m pip install ruff==0.15.13
       - name: Run ruff check
         run: ruff check .
       - name: Run ruff format check
         run: ruff format --check .
+
+  typecheck:
+    runs-on: ubuntu-latest
+    continue-on-error: true  # informational until type errors are resolved
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+      - name: Install package and pyright
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pyright
+          python -m pip install -e .
+      - name: Run pyright
+        run: pyright src/zotero_mcp --level warning || true
 
   test:
     needs: lint
