@@ -85,7 +85,13 @@ jobs:
   github-release-artifacts:
     needs: [test, build]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags')
+    # Upload artifacts whenever the ref is a tag, regardless of how the workflow
+    # was triggered. This covers:
+    #  - `git push --tags` (push event on refs/tags/*)
+    #  - `gh workflow run --ref vX.Y.Z` (workflow_dispatch on a tag)
+    # GitHub sometimes coalesces a combined branch+tag push into a single run on
+    # the branch ref, so relying on event_name alone misses tag uploads.
+    if: github.ref_type == 'tag'
     permissions:
       contents: write
     steps:
