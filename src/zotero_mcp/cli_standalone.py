@@ -14,8 +14,12 @@ Usage:
 """
 
 import argparse
+import asyncio
+import inspect
 import json
 import sys
+from collections.abc import Awaitable
+from typing import Any
 
 # Reuse environment setup from the original CLI module
 from zotero_mcp.cli import (
@@ -28,21 +32,59 @@ from zotero_mcp.cli import (
 # ---------------------------------------------------------------------------
 
 
+class _CompletedAwaitable:
+    def __await__(self):
+        if False:
+            yield None
+        return None
+
+
 class CLIContext:
     """Drop-in replacement for fastmcp.Context that writes to stderr."""
 
     def __init__(self, verbose: bool = False):
         self._verbose = verbose
 
-    def info(self, message: str) -> None:
+    def info(self, message: str):
         if self._verbose:
             print(f"[INFO] {message}", file=sys.stderr)
+        return _CompletedAwaitable()
 
-    def warning(self, message: str) -> None:
+    def warning(self, message: str):
         print(f"[WARN] {message}", file=sys.stderr)
+        return _CompletedAwaitable()
 
-    def error(self, message: str) -> None:
+    def error(self, message: str):
         print(f"[ERROR] {message}", file=sys.stderr)
+        return _CompletedAwaitable()
+
+
+async def _await_value(value: Awaitable[Any]) -> Any:
+    return await value
+
+
+def _run_maybe_async(value: Any) -> Any:
+    """Return plain values from sync or async tool calls for CLI handlers."""
+    if inspect.isawaitable(value):
+        return asyncio.run(_await_value(value))
+    return value
+
+
+class _ToolModuleProxy:
+    """Expose async tool functions through a synchronous CLI-friendly facade."""
+
+    def __init__(self, module):
+        self._module = module
+
+    def __getattr__(self, name):
+        attr = getattr(self._module, name)
+        if not callable(attr):
+            return attr
+
+        def wrapper(*args, **kwargs):
+            return _run_maybe_async(attr(*args, **kwargs))
+
+        return wrapper
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +97,13 @@ def _import_tools():
     from zotero_mcp import client as _client
     from zotero_mcp.tools import annotations, retrieval, search, write
 
-    return search, retrieval, annotations, write, _client
+    return (
+        _ToolModuleProxy(search),
+        _ToolModuleProxy(retrieval),
+        _ToolModuleProxy(annotations),
+        _ToolModuleProxy(write),
+        _client,
+    )
 
 
 def _ctx(args) -> CLIContext:
