@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-05-16
+
+### Fixed
+- **Standalone CLI broken after async migration** — `zotero-cli` commands printed coroutine objects instead of results. Added `_ToolModuleProxy` to bridge async tool functions back to sync CLI handlers.
+- **Test suite hangs** — `server_lifespan` now cancels the background semantic-update task on shutdown, preventing indefinite hangs when the context manager exits early.
+- **arXiv URL test mocks** — tests now mock `rate_limited_get` (the actual call path) instead of `requests.get`, eliminating real network calls and rate-limiter sleeps during tests.
+
+### Changed
+- Version bump to 0.3.4.
+
 ## [0.3.3] - 2026-05-16
 
 ### Added
