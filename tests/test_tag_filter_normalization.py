@@ -29,9 +29,7 @@ class TestNormalizeTagFilter:
     def test_list_of_dicts_with_tag_key(self):
         """The #237 primary case — LLM sends Zotero's stored-tag dict shape."""
         assert _normalize_tag_filter([{"tag": "FIXME"}]) == ["FIXME"]
-        assert _normalize_tag_filter(
-            [{"tag": "a"}, {"tag": "b"}]
-        ) == ["a", "b"]
+        assert _normalize_tag_filter([{"tag": "a"}, {"tag": "b"}]) == ["a", "b"]
 
     def test_list_of_dicts_with_name_key(self):
         """Accept {'name': 'X'} as a fallback shape some clients emit."""
@@ -51,9 +49,7 @@ class TestNormalizeTagFilter:
 
     def test_mixed_list(self):
         """Heterogeneous list: dicts and bare strings interleaved."""
-        assert _normalize_tag_filter(
-            [{"tag": "a"}, "b", {"name": "c"}]
-        ) == ["a", "b", "c"]
+        assert _normalize_tag_filter([{"tag": "a"}, "b", {"name": "c"}]) == ["a", "b", "c"]
 
     def test_empty_dict_ignored(self):
         assert _normalize_tag_filter([{}]) == []
@@ -103,15 +99,17 @@ class TestSearchItemsIntegration:
             lambda: fake,
         )
 
-    def test_search_items_accepts_dict_shape_tag(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_search_items_accepts_dict_shape_tag(self, monkeypatch):
         """The exact failing call from the #237 bug report."""
-        from zotero_mcp import server
         from conftest import DummyContext
+
+        from zotero_mcp import server
 
         fake = _SearchableFake()
         self._patch(monkeypatch, fake)
 
-        result = server.search_items(
+        result = await server.search_items(
             query="whatever",
             tag=[{"tag": "FIXME"}],
             ctx=DummyContext(),
@@ -121,15 +119,17 @@ class TestSearchItemsIntegration:
         # No pydantic explosion; search ran to a clean "no results"
         assert "FIXME" in result
 
-    def test_search_items_accepts_json_string_tag(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_search_items_accepts_json_string_tag(self, monkeypatch):
         """The stringified form the MCP serialization layer produces."""
-        from zotero_mcp import server
         from conftest import DummyContext
+
+        from zotero_mcp import server
 
         fake = _SearchableFake()
         self._patch(monkeypatch, fake)
 
-        result = server.search_items(
+        result = await server.search_items(
             query="whatever",
             tag='[{"tag": "FIXME"}]',
             ctx=DummyContext(),
@@ -137,15 +137,17 @@ class TestSearchItemsIntegration:
         assert fake.last_params.get("tag") == ["FIXME"]
         assert "FIXME" in result
 
-    def test_search_items_accepts_canonical_list_of_strings(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_search_items_accepts_canonical_list_of_strings(self, monkeypatch):
         """Regression guard: canonical shape must still work."""
-        from zotero_mcp import server
         from conftest import DummyContext
+
+        from zotero_mcp import server
 
         fake = _SearchableFake()
         self._patch(monkeypatch, fake)
 
-        result = server.search_items(
+        result = await server.search_items(
             query="whatever",
             tag=["a", "b"],
             ctx=DummyContext(),
@@ -153,13 +155,15 @@ class TestSearchItemsIntegration:
         assert fake.last_params.get("tag") == ["a", "b"]
         assert "a, b" in result
 
-    def test_search_items_no_tag(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_search_items_no_tag(self, monkeypatch):
         """Regression guard: tag omitted entirely should not pass tag= to API."""
-        from zotero_mcp import server
         from conftest import DummyContext
+
+        from zotero_mcp import server
 
         fake = _SearchableFake()
         self._patch(monkeypatch, fake)
 
-        server.search_items(query="whatever", ctx=DummyContext())
+        await server.search_items(query="whatever", ctx=DummyContext())
         assert "tag" not in fake.last_params or not fake.last_params.get("tag")

@@ -5,7 +5,7 @@ This module provides intelligent updating that detects the original installation
 method and preserves all user configurations.
 """
 
-import json
+import logging
 import os
 import shutil
 import subprocess
@@ -13,7 +13,6 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any
-import logging
 
 try:
     import requests
@@ -51,9 +50,7 @@ def _is_uv_tool_installation() -> bool:
             text=True,
             timeout=10,
         )
-        return result.returncode == 0 and (
-            "zotero-mcp-server" in result.stdout or "zotero-mcp" in result.stdout
-        )
+        return result.returncode == 0 and ("zotero-mcp-server" in result.stdout or "zotero-mcp" in result.stdout)
     except Exception:
         return False
 
@@ -119,12 +116,7 @@ def is_pipx_installation() -> bool:
             return False
 
         # Try to get pipx list
-        result = subprocess.run(
-            ["pipx", "list"],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
+        result = subprocess.run(["pipx", "list"], capture_output=True, text=True, timeout=10)
 
         if result.returncode == 0:
             return "zotero-mcp-server" in result.stdout or "zotero-mcp" in result.stdout
@@ -139,15 +131,13 @@ def get_current_version() -> str | None:
     """Get the currently installed version of zotero-mcp."""
     try:
         from zotero_mcp._version import __version__
+
         return __version__
     except ImportError:
         # Fallback to pip show
         try:
             result = subprocess.run(
-                [sys.executable, "-m", "pip", "show", "zotero-mcp-server"],
-                capture_output=True,
-                text=True,
-                timeout=10
+                [sys.executable, "-m", "pip", "show", "zotero-mcp-server"], capture_output=True, text=True, timeout=10
             )
 
             if result.returncode == 0:
@@ -167,10 +157,7 @@ def get_latest_version() -> str | None:
         return None
 
     try:
-        response = requests.get(
-            f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
-            timeout=10
-        )
+        response = requests.get(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest", timeout=10)
         if response.status_code == 200:
             data = response.json()
             tag_name = data.get("tag_name", "")
@@ -228,7 +215,7 @@ def backup_configurations() -> Path:
         try:
             backup_semantic_path = backup_dir / "semantic_config.json"
             shutil.copy2(semantic_config_path, backup_semantic_path)
-            print(f"Backed up semantic search config")
+            print("Backed up semantic search config")
         except Exception as e:
             logger.warning(f"Could not backup semantic search config: {e}")
 
@@ -238,7 +225,7 @@ def backup_configurations() -> Path:
         try:
             backup_chroma_path = backup_dir / "chroma_db"
             shutil.copytree(chroma_db_path, backup_chroma_path)
-            print(f"Backed up ChromaDB database")
+            print("Backed up ChromaDB database")
         except Exception as e:
             logger.warning(f"Could not backup ChromaDB database: {e}")
 
@@ -279,7 +266,7 @@ def restore_configurations(backup_dir: Path) -> bool:
             semantic_config_path = Path.home() / ".config" / "zotero-mcp" / "config.json"
             semantic_config_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(semantic_backup, semantic_config_path)
-            print(f"Restored semantic search config")
+            print("Restored semantic search config")
         except Exception as e:
             logger.error(f"Could not restore semantic search config: {e}")
             success = False
@@ -292,7 +279,7 @@ def restore_configurations(backup_dir: Path) -> bool:
             if chroma_db_path.exists():
                 shutil.rmtree(chroma_db_path)
             shutil.copytree(chroma_backup, chroma_db_path)
-            print(f"Restored ChromaDB database")
+            print("Restored ChromaDB database")
         except Exception as e:
             logger.error(f"Could not restore ChromaDB database: {e}")
             success = False
@@ -340,10 +327,7 @@ def update_via_method(method: str, force: bool = False) -> tuple[bool, str]:
             # First try to upgrade, if that fails, reinstall
             try:
                 result = subprocess.run(
-                    ["pipx", "install", "--force", url_package],
-                    capture_output=True,
-                    text=True,
-                    timeout=300
+                    ["pipx", "install", "--force", url_package], capture_output=True, text=True, timeout=300
                 )
                 if result.returncode == 0:
                     return True, "Updated successfully from GitHub via pipx"
@@ -355,20 +339,11 @@ def update_via_method(method: str, force: bool = False) -> tuple[bool, str]:
         else:
             return False, f"Unknown installation method: {method}"
 
-        if (
-            force
-            and method != "pipx"
-            and cmd[:3] != ["uv", "tool", "install"]
-        ):
+        if force and method != "pipx" and cmd[:3] != ["uv", "tool", "install"]:
             cmd.append("--force-reinstall")
 
         print(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=300
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
         if result.returncode == 0:
             return True, f"Successfully updated via {method}"
@@ -390,17 +365,13 @@ def verify_installation() -> tuple[bool, str]:
     """
     try:
         # Try to import the module
-        import zotero_mcp
 
         # Try to get version
         from zotero_mcp._version import __version__
 
         # Try to run a basic command
         result = subprocess.run(
-            [sys.executable, "-m", "zotero_mcp.cli", "version"],
-            capture_output=True,
-            text=True,
-            timeout=10
+            [sys.executable, "-m", "zotero_mcp.cli", "version"], capture_output=True, text=True, timeout=10
         )
 
         if result.returncode == 0:
@@ -412,9 +383,7 @@ def verify_installation() -> tuple[bool, str]:
         return False, f"Installation verification error: {str(e)}"
 
 
-def update_zotero_mcp(check_only: bool = False,
-                     force: bool = False,
-                     method: str | None = None) -> dict[str, Any]:
+def update_zotero_mcp(check_only: bool = False, force: bool = False, method: str | None = None) -> dict[str, Any]:
     """
     Main update function for zotero-mcp.
 
@@ -432,7 +401,7 @@ def update_zotero_mcp(check_only: bool = False,
         "latest_version": None,
         "method": None,
         "message": "",
-        "needs_update": False
+        "needs_update": False,
     }
 
     # Get current version

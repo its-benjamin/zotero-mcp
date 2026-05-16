@@ -1,12 +1,4 @@
-import sys
-
 import pytest
-
-if sys.version_info >= (3, 14):
-    pytest.skip(
-        "chromadb currently relies on pydantic v1 paths that are incompatible with Python 3.14+",
-        allow_module_level=True,
-    )
 
 from zotero_mcp import semantic_search
 
@@ -153,9 +145,7 @@ def test_update_database_stats_includes_recovered_items_field(monkeypatch):
     search = semantic_search.ZoteroSemanticSearch(chroma_client=FakeChromaClient())
 
     # Force update_database to short-circuit by feeding an empty source.
-    monkeypatch.setattr(
-        search, "_get_items_from_source", lambda **kwargs: []
-    )
+    monkeypatch.setattr(search, "_get_items_from_source", lambda **kwargs: [])
     monkeypatch.setattr(search, "_save_update_config", lambda: None)
 
     stats = search.update_database()

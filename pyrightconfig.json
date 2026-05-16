@@ -1,0 +1,17 @@
+{
+  "include": ["src/zotero_mcp"],
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "basic",
+  "reportOptionalMemberAccess": "warning",
+  "reportArgumentType": "warning",
+  "reportIndexIssue": false,
+  "reportOptionalIterable": false,
+  "reportCallIssue": "warning",
+  "reportOptionalSubscript": false,
+  "reportAttributeAccessIssue": false,
+  "reportGeneralTypeIssues": false,
+  "reportReturnType": "warning",
+  "reportAssignmentType": "warning",
+  "reportMissingImports": "warning",
+  "reportOperatorIssue": "warning"
+}

@@ -2,9 +2,12 @@
 Zotero client wrapper for MCP server.
 """
 
+import asyncio
+import contextvars
 import functools
+import inspect
+import logging
 import os
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,25 +19,54 @@ from pyzotero import zotero
 from zotero_mcp.rate_limiter import RateLimitedZotero
 from zotero_mcp.utils import format_creators
 
+_logger = logging.getLogger(__name__)
+
 # Load environment variables
 load_dotenv()
 
 # Serialize all Zotero API access. The local API (port 23119) is single-threaded;
-# concurrent requests from parallel MCP tool threads queue at the network layer and
-# risk hitting pyzotero's 30s timeout. A process-local semaphore ensures only one
-# request is in-flight at a time — the rest queue in-process (microseconds) instead
-# of at the API (seconds/timeout). Use an RLock because top-level tools can call
-# decorated helper functions in the same thread.
-_zotero_api_lock = threading.RLock()
+# concurrent requests from parallel MCP tools queue at the network layer and risk
+# hitting pyzotero's 30s timeout. A process-local async lock ensures only one
+# request is in-flight at a time. A ContextVar keeps nested decorated calls
+# re-entrant within the same task.
+_zotero_api_lock = asyncio.Lock()
+_zotero_api_lock_depth: contextvars.ContextVar[int] = contextvars.ContextVar("zotero_api_lock_depth", default=0)
 
 
 def with_zotero_api_lock(func):
-    """Serialize Zotero API access across concurrent MCP tool threads."""
+    """Serialize Zotero API access across concurrent MCP tool tasks."""
+
+    if inspect.iscoroutinefunction(func):
+
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            depth = _zotero_api_lock_depth.get()
+            if depth > 0:
+                token = _zotero_api_lock_depth.set(depth + 1)
+                try:
+                    return await func(*args, **kwargs)
+                finally:
+                    _zotero_api_lock_depth.reset(token)
+
+            async with _zotero_api_lock:
+                token = _zotero_api_lock_depth.set(1)
+                try:
+                    return await func(*args, **kwargs)
+                finally:
+                    _zotero_api_lock_depth.reset(token)
+
+        return async_wrapper
+
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        with _zotero_api_lock:
-            return func(*args, **kwargs)
+        return func(*args, **kwargs)
+
     return wrapper
+
+
+async def run_blocking(func, /, *args, **kwargs) -> Any:
+    """Run blocking pyzotero, requests, or filesystem work off the event loop."""
+    return await asyncio.to_thread(func, *args, **kwargs)
 
 
 # Runtime library override state — set by zotero_switch_library tool.
@@ -69,7 +101,7 @@ class AttachmentDetails:
     content_type: str
 
 
-def get_zotero_client() -> zotero.Zotero:
+def get_zotero_client() -> Any:
     """
     Get authenticated Zotero client using environment variables.
 
@@ -106,7 +138,22 @@ def get_zotero_client() -> zotero.Zotero:
         api_key=api_key,
         local=local,
     )
-    return RateLimitedZotero(client, enabled=not local)
+    wrapped = RateLimitedZotero(client, enabled=not local)
+
+    # Eagerly verify local Zotero is reachable so users get a clear message
+    if local:
+        try:
+            client.items(limit=1)
+        except Exception as exc:
+            _logger.debug("Local Zotero connection check failed: %s", exc)
+            raise ConnectionError(
+                "Could not connect to Zotero on localhost:23119. "
+                "Make sure the Zotero desktop app is running and that "
+                "'Allow other applications on this computer to communicate with Zotero' "
+                "is enabled in Settings > Advanced."
+            ) from exc
+
+    return wrapped
 
 
 def get_local_zotero_client() -> zotero.Zotero | None:
@@ -135,7 +182,7 @@ def get_local_zotero_client() -> zotero.Zotero | None:
         return None
 
 
-def get_web_zotero_client() -> zotero.Zotero | None:
+def get_web_zotero_client() -> Any | None:
     """
     Get a web API Zotero client for write operations.
 
@@ -298,6 +345,7 @@ def generate_bibtex(item: dict[str, Any]) -> str:
     # Try Better BibTeX first
     try:
         from zotero_mcp.better_bibtex_client import ZoteroBetterBibTexAPI
+
         bibtex = ZoteroBetterBibTexAPI()
 
         if bibtex.is_zotero_running():
@@ -324,7 +372,7 @@ def generate_bibtex(item: dict[str, Any]) -> str:
         "thesis": "phdthesis",
         "report": "techreport",
         "webpage": "misc",
-        "manuscript": "unpublished"
+        "manuscript": "unpublished",
     }
 
     # Create citation key
@@ -353,14 +401,14 @@ def generate_bibtex(item: dict[str, Any]) -> str:
         ("place", "address"),
         ("DOI", "doi"),
         ("url", "url"),
-        ("abstractNote", "abstract")
+        ("abstractNote", "abstract"),
     ]
 
     for zotero_field, bibtex_field in field_mappings:
         if value := data.get(zotero_field):
             # Escape special characters
             value = value.replace("{", "\\{").replace("}", "\\}")
-            lines.append(f'  {bibtex_field} = {{{value}}},')
+            lines.append(f"  {bibtex_field} = {{{value}}},")
 
     # Add authors
     if creators:
@@ -372,23 +420,21 @@ def generate_bibtex(item: dict[str, Any]) -> str:
                 elif "name" in creator:
                     authors.append(creator["name"])
         if authors:
-            lines.append(f'  author = {{{" and ".join(authors)}}},')
+            lines.append(f"  author = {{{' and '.join(authors)}}},")
 
     # Add year
     if year != "nodate":
-        lines.append(f'  year = {{{year}}},')
+        lines.append(f"  year = {{{year}}},")
 
     # Remove trailing comma from last field and close entry
-    if lines[-1].endswith(','):
+    if lines[-1].endswith(","):
         lines[-1] = lines[-1][:-1]
     lines.append("}")
 
     return "\n".join(lines)
 
 
-def get_attachment_details(
-    zot: zotero.Zotero, item: dict[str, Any]
-) -> AttachmentDetails | None:
+def get_attachment_details(zot: zotero.Zotero, item: dict[str, Any]) -> AttachmentDetails | None:
     """
     Get attachment details for a Zotero item, finding the most relevant attachment.
 

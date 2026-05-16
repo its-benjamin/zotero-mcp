@@ -153,7 +153,7 @@ zotero-mcp setup --semantic-config-only
 - **Default (all-MiniLM-L6-v2)**: Free, runs locally, good for most use cases
 - **OpenAI**: Better quality, requires API key (`text-embedding-3-small` or `text-embedding-3-large`)
 - **Gemini**: Better quality, requires API key (`gemini-embedding-001`)
-- **Voyage AI**: Better retrieval quality, requires API key (`voyage-3.5`)
+- **Voyage AI**: Better retrieval quality, requires API key (`voyage-4-lite`)
 
 **Update Frequency Options:**
 - **Manual**: Update only when you run `zotero-mcp update-db`
@@ -297,13 +297,18 @@ zotero-mcp setup --no-local --api-key YOUR_API_KEY --library-id YOUR_LIBRARY_ID
 - `GEMINI_API_KEY`: Your Gemini API key (for Gemini embeddings)
 - `GEMINI_EMBEDDING_MODEL`: Gemini model name (gemini-embedding-001)
 - `GEMINI_BASE_URL`: Custom Gemini endpoint URL (optional, for use with compatible APIs)
+- `GEMINI_OUTPUT_DIMENSIONALITY`: Gemini embedding output dimensionality (default: 768)
 - `VOYAGE_API_KEY`: Your Voyage AI API key (for Voyage embeddings)
-- `VOYAGE_EMBEDDING_MODEL`: Voyage model name (default: voyage-3.5)
+- `VOYAGE_EMBEDDING_MODEL`: Voyage model name (default: voyage-4-lite)
 - `VOYAGE_BASE_URL`: Custom Voyage endpoint URL (optional)
+- `VOYAGE_TOKENS_PER_MINUTE`: Voyage embedding token budget used by the local throttler (default: 10000)
+- `VOYAGE_REQUEST_BATCH_SIZE`: Voyage embedding request batch size (default: 16)
+- `VOYAGE_OUTPUT_DIMENSION`: Voyage embedding output dimension for Voyage 4 models (default: 512)
 - `ZOTERO_DB_PATH`: Custom `zotero.sqlite` path (optional)
 
 **API Rate Limits:**
 External API calls are throttled by provider instead of being fired in a burst. Defaults are conservative and can be overridden with `ZOTERO_MCP_RATE_<PROVIDER>_REQUESTS` and `ZOTERO_MCP_RATE_<PROVIDER>_WINDOW_SECONDS`, where provider is one of `ZOTERO`, `CROSSREF`, `ARXIV`, `UNPAYWALL`, `SEMANTIC_SCHOLAR`, `PMC`, `SCITE`, `OPENAI`, `GEMINI`, or `VOYAGE`.
+Embedding-provider rate limits are retried until the current batch succeeds; non-rate-limit errors still fail normally.
 
 ### Command-Line Options
 

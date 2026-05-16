@@ -31,14 +31,14 @@ if TYPE_CHECKING:
 
 # Anchor-based matching settings
 ANCHOR_MIN_TEXT_LENGTH = 100  # Use anchor matching for text longer than this
-ANCHOR_TARGET_LENGTH = 40     # Target length for start/end anchors
+ANCHOR_TARGET_LENGTH = 40  # Target length for start/end anchors
 ANCHOR_WORD_BOUNDARY_TOLERANCE = 15  # How far to extend to find word boundary
 ANCHOR_MATCH_THRESHOLD = 0.75  # Minimum similarity for anchor fuzzy matching
 
 # Fuzzy matching thresholds (by text length)
-FUZZY_THRESHOLD_SHORT = 0.85   # For text < 50 chars
+FUZZY_THRESHOLD_SHORT = 0.85  # For text < 50 chars
 FUZZY_THRESHOLD_MEDIUM = 0.75  # For text 50-150 chars
-FUZZY_THRESHOLD_LONG = 0.65    # For text > 150 chars
+FUZZY_THRESHOLD_LONG = 0.65  # For text > 150 chars
 
 # Search behavior
 DEFAULT_NEIGHBOR_PAGES = 2  # How many pages to search on either side
@@ -53,26 +53,26 @@ SLIDING_WINDOW_STEP_THRESHOLD = 10000  # Use stepping for texts longer than this
 
 # Character replacement maps for normalization
 DASH_REPLACEMENTS = {
-    '\u2014': '-',  # em-dash
-    '\u2013': '-',  # en-dash
-    '\u2012': '-',  # figure dash
-    '\u2011': '-',  # non-breaking hyphen
-    '\u2010': '-',  # hyphen
+    "\u2014": "-",  # em-dash
+    "\u2013": "-",  # en-dash
+    "\u2012": "-",  # figure dash
+    "\u2011": "-",  # non-breaking hyphen
+    "\u2010": "-",  # hyphen
 }
 
 QUOTE_REPLACEMENTS = {
-    '\u2018': "'",  # left single quote
-    '\u2019': "'",  # right single quote
-    '\u201c': '"',  # left double quote
-    '\u201d': '"',  # right double quote
+    "\u2018": "'",  # left single quote
+    "\u2019": "'",  # right single quote
+    "\u201c": '"',  # left double quote
+    "\u201d": '"',  # right double quote
 }
 
 LIGATURE_REPLACEMENTS = {
-    '\ufb01': 'fi',   # fi ligature
-    '\ufb02': 'fl',   # fl ligature
-    '\ufb00': 'ff',   # ff ligature
-    '\ufb03': 'ffi',  # ffi ligature
-    '\ufb04': 'ffl',  # ffl ligature
+    "\ufb01": "fi",  # fi ligature
+    "\ufb02": "fl",  # fl ligature
+    "\ufb00": "ff",  # ff ligature
+    "\ufb03": "ffi",  # ffi ligature
+    "\ufb04": "ffl",  # ffl ligature
 }
 
 
@@ -94,8 +94,8 @@ def normalize_text(text: str) -> str:
         Normalized text suitable for comparison
     """
     # Remove hyphenation at line breaks
-    text = re.sub(r'-\s*\n\s*', '', text)
-    text = re.sub(r'[\u00ad\u2010\u2011-]\s*\n\s*', '', text)
+    text = re.sub(r"-\s*\n\s*", "", text)
+    text = re.sub(r"[\u00ad\u2010\u2011-]\s*\n\s*", "", text)
 
     # Apply character replacements
     for old, new in DASH_REPLACEMENTS.items():
@@ -106,7 +106,7 @@ def normalize_text(text: str) -> str:
         text = text.replace(old, new)
 
     # Collapse whitespace
-    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r"\s+", " ", text)
     return text.strip()
 
 
@@ -124,13 +124,14 @@ def normalize_for_matching(text: str) -> str:
         Text with all spaces removed, lowercased
     """
     text = normalize_text(text)
-    text = re.sub(r'\s+', '', text)
+    text = re.sub(r"\s+", "", text)
     return text.lower()
 
 
 # =============================================================================
 # Page Text Extraction
 # =============================================================================
+
 
 def _extract_page_spans(page) -> list[dict[str, Any]]:
     """
@@ -150,10 +151,12 @@ def _extract_page_spans(page) -> list[dict[str, Any]]:
             continue
         for line in block["lines"]:
             for span in line["spans"]:
-                spans.append({
-                    "text": span["text"],
-                    "bbox": span["bbox"],
-                })
+                spans.append(
+                    {
+                        "text": span["text"],
+                        "bbox": span["bbox"],
+                    }
+                )
 
     return spans
 
@@ -218,6 +221,7 @@ def _get_spans_in_range(
 # =============================================================================
 # Coordinate Conversion
 # =============================================================================
+
 
 def _convert_rects_to_zotero(
     bboxes: list[tuple[float, float, float, float]],
@@ -306,6 +310,7 @@ def _build_search_result(
 # Search Strategies
 # =============================================================================
 
+
 def _sliding_window_match(
     text: str,
     pattern: str,
@@ -345,7 +350,7 @@ def _sliding_window_match(
 
     # First pass: find approximate location
     for i in range(0, len(text) - pattern_len + 1, step):
-        window = text_lower[i:i + window_size]
+        window = text_lower[i : i + window_size]
         ratio = SequenceMatcher(None, pattern_lower, window).ratio()
 
         if ratio > best_ratio:
@@ -359,7 +364,7 @@ def _sliding_window_match(
         refine_end = min(len(text) - pattern_len + 1, best_start + step)
 
         for i in range(refine_start, refine_end):
-            window = text_lower[i:i + window_size]
+            window = text_lower[i : i + window_size]
             ratio = SequenceMatcher(None, pattern_lower, window).ratio()
 
             if ratio > best_ratio:
@@ -418,7 +423,7 @@ def _extract_anchor(text: str, from_start: bool) -> str:
         remaining = text[:-ANCHOR_TARGET_LENGTH]
         last_space = remaining.rfind(" ")
         if last_space != -1 and len(remaining) - last_space < ANCHOR_WORD_BOUNDARY_TOLERANCE:
-            anchor = text[last_space + 1:]
+            anchor = text[last_space + 1 :]
 
     return anchor.strip()
 
@@ -462,9 +467,7 @@ def _anchor_based_search(page, page_index: int, search_text: str) -> dict | None
     start_pos = cumulative.find(normalized_start)
 
     if start_pos == -1:
-        match = _sliding_window_match(
-            cumulative, normalized_start, ANCHOR_MATCH_THRESHOLD, return_best=True
-        )
+        match = _sliding_window_match(cumulative, normalized_start, ANCHOR_MATCH_THRESHOLD, return_best=True)
         if match and match[2] >= ANCHOR_MATCH_THRESHOLD:
             start_pos = match[0]
         else:
@@ -477,9 +480,7 @@ def _anchor_based_search(page, page_index: int, search_text: str) -> dict | None
 
     if end_pos == -1:
         remaining = cumulative[search_offset:]
-        match = _sliding_window_match(
-            remaining, normalized_end, ANCHOR_MATCH_THRESHOLD, return_best=True
-        )
+        match = _sliding_window_match(remaining, normalized_end, ANCHOR_MATCH_THRESHOLD, return_best=True)
         if match and match[2] >= ANCHOR_MATCH_THRESHOLD:
             end_pos = search_offset + match[0] + len(normalized_end)
         else:
@@ -544,9 +545,7 @@ def _fuzzy_search_page(
             }
 
     # Try sliding window fuzzy match
-    match_result = _sliding_window_match(
-        cumulative, normalized_search, threshold, return_best=True
-    )
+    match_result = _sliding_window_match(cumulative, normalized_search, threshold, return_best=True)
 
     if match_result is None:
         return None
@@ -607,9 +606,7 @@ def _search_single_page(
         text_instances = page.search_for(normalized)
 
     if text_instances:
-        rects, min_y, min_x = _convert_rects_to_zotero(
-            [r for r in text_instances], page_height
-        )
+        rects, min_y, min_x = _convert_rects_to_zotero([r for r in text_instances], page_height)
         return {
             "pageIndex": page_index,
             "rects": rects,
@@ -647,6 +644,7 @@ def _search_single_page(
 # =============================================================================
 # Public API
 # =============================================================================
+
 
 def find_text_position(
     pdf_path: str,
@@ -690,10 +688,7 @@ def find_text_position(
     try:
         import fitz
     except ImportError:
-        raise ImportError(
-            "pymupdf is required for PDF text search. "
-            "Install it with: pip install pymupdf"
-        )
+        raise ImportError("pymupdf is required for PDF text search. Install it with: pip install pymupdf")
 
     doc = fitz.open(pdf_path)
 
@@ -793,7 +788,7 @@ def verify_pdf_attachment(pdf_path: str) -> bool:
     except ImportError:
         raise ImportError(
             "PDF annotation features require PyMuPDF. "
-            "Install it with: pip install \"zotero-mcp-server[pdf] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1\""
+            'Install it with: pip install "zotero-mcp-server[pdf] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.1"'
         )
     try:
         doc = fitz.open(pdf_path)
@@ -815,10 +810,13 @@ def build_annotation_position(page_index: int, rects: list[list[float]]) -> str:
     Returns:
         JSON string for Zotero's annotationPosition field
     """
-    return json.dumps({
-        "pageIndex": page_index,
-        "rects": rects,
-    })
+    return json.dumps(
+        {
+            "pageIndex": page_index,
+            "rects": rects,
+        }
+    )
+
 
 def build_area_position_data(
     pdf_path: str,
@@ -855,10 +853,7 @@ def build_area_position_data(
     try:
         import fitz
     except ImportError:
-        raise ImportError(
-            "pymupdf is required for PDF area annotations. "
-            "Install it with: pip install pymupdf"
-        )
+        raise ImportError("pymupdf is required for PDF area annotations. Install it with: pip install pymupdf")
 
     doc = fitz.open(pdf_path)
 
@@ -872,12 +867,14 @@ def build_area_position_data(
             }
 
         page = doc[target_index]
-        bbox = [(
-            round(x * page.rect.width, 4),
-            round(y * page.rect.height, 4),
-            round((x + width) * page.rect.width, 4),
-            round((y + height) * page.rect.height, 4),
-        )]
+        bbox = [
+            (
+                round(x * page.rect.width, 4),
+                round(y * page.rect.height, 4),
+                round((x + width) * page.rect.width, 4),
+                round((y + height) * page.rect.height, 4),
+            )
+        ]
         rects, min_y, min_x = _convert_rects_to_zotero(
             bbox,
             page.rect.height,

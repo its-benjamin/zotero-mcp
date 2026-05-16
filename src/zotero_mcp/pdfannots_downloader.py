@@ -2,13 +2,13 @@
 Utility for downloading and installing the pdfannots2json tool.
 """
 
+import hashlib
 import os
 import platform
-import tempfile
 import tarfile
-import zipfile
-import hashlib
+import tempfile
 import urllib.request
+import zipfile
 
 # Constants
 CURRENT_VERSION = "1.0.15"
@@ -18,15 +18,13 @@ BASE_URL = f"https://github.com/mgmeyers/pdfannots2json/releases/download/{CURRE
 DOWNLOAD_URLS = {
     "darwin": {
         "x86_64": f"{BASE_URL}pdfannots2json.Mac.Intel.tar.gz",
-        "arm64": f"{BASE_URL}pdfannots2json.Mac.M1.tar.gz"
+        "arm64": f"{BASE_URL}pdfannots2json.Mac.M1.tar.gz",
     },
-    "linux": {
-        "x86_64": f"{BASE_URL}pdfannots2json.Linux.x64.tar.gz"
-    },
+    "linux": {"x86_64": f"{BASE_URL}pdfannots2json.Linux.x64.tar.gz"},
     "win32": {
         "x86_64": f"{BASE_URL}pdfannots2json.Windows.x64.zip",
-        "AMD64": f"{BASE_URL}pdfannots2json.Windows.x64.zip"  # Windows reports AMD64 instead of x86_64
-    }
+        "AMD64": f"{BASE_URL}pdfannots2json.Windows.x64.zip",  # Windows reports AMD64 instead of x86_64
+    },
 }
 
 # Pinned SHA256 hashes for upstream release binaries.
@@ -37,6 +35,7 @@ EXPECTED_SHA256 = {
     "pdfannots2json.Windows.x64.zip": "0d1496dce3518a4f6523af784051ddd1f1a2083690da41d39da7a198199aa4f3",
 }
 
+
 def get_executable_name():
     """Get the name of the executable based on the platform"""
     if platform.system().lower() == "windows":
@@ -44,13 +43,16 @@ def get_executable_name():
     else:
         return f"pdfannots2json-{platform.system().lower()}-{platform.machine()}"
 
+
 def get_install_dir():
     """Get the directory to install the executable"""
     return os.path.expanduser("~/.pdfannots2json")
 
+
 def get_executable_path():
     """Get the full path to the executable"""
     return os.path.join(get_install_dir(), get_executable_name())
+
 
 def get_download_url():
     """Get the download URL for the current platform and architecture"""
@@ -72,11 +74,13 @@ def get_download_url():
 
     return None
 
+
 def make_executable(path):
     """Make a file executable"""
     if platform.system().lower() != "windows":
         current_mode = os.stat(path).st_mode
         os.chmod(path, current_mode | 0o111)  # Add executable bit
+
 
 def exists():
     """Check if the executable exists"""
@@ -98,10 +102,7 @@ def _verify_archive_checksum(archive_path: str, url: str) -> bool:
 
     actual = hasher.hexdigest()
     if actual != expected:
-        print(
-            f"Checksum mismatch for {asset_name}. "
-            f"Expected {expected}, got {actual}"
-        )
+        print(f"Checksum mismatch for {asset_name}. Expected {expected}, got {actual}")
         return False
     return True
 

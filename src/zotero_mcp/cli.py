@@ -70,6 +70,7 @@ def load_standalone_env_vars():
     """Load environment variables from standalone config (~/.config/zotero-mcp/config.json)."""
     try:
         from pathlib import Path
+
         cfg_path = Path.home() / ".config" / "zotero-mcp" / "config.json"
         if not cfg_path.exists():
             return {}
@@ -119,7 +120,7 @@ def _save_zotero_db_path_to_config(config_path: Path, db_path: str) -> None:
         full_config["semantic_search"]["zotero_db_path"] = db_path
 
         # Write back to file
-        with open(config_path, 'w') as f:
+        with open(config_path, "w") as f:
             json.dump(full_config, f, indent=2)
 
         print(f"Saved Zotero database path to config: {config_path}")
@@ -155,9 +156,7 @@ def setup_zotero_environment():
 
 def main():
     """Main entry point for the CLI."""
-    parser = argparse.ArgumentParser(
-        description="Zotero Model Context Protocol server"
-    )
+    parser = argparse.ArgumentParser(description="Zotero Model Context Protocol server")
 
     # Create subparsers for different commands
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
@@ -184,40 +183,48 @@ def main():
 
     # Setup command
     setup_parser = subparsers.add_parser("setup", help="Configure zotero-mcp (Claude Desktop or standalone)")
-    setup_parser.add_argument("--no-local", action="store_true",
-                             help="Configure for Zotero Web API instead of local API")
+    setup_parser.add_argument(
+        "--no-local", action="store_true", help="Configure for Zotero Web API instead of local API"
+    )
     setup_parser.add_argument("--api-key", help="Zotero API key (only needed with --no-local)")
     setup_parser.add_argument("--library-id", help="Zotero library ID (only needed with --no-local)")
-    setup_parser.add_argument("--library-type", choices=["user", "group"], default="user",
-                             help="Zotero library type (only needed with --no-local)")
-    setup_parser.add_argument("--no-claude", action="store_true",
-                             help="Skip Claude Desktop config; write standalone config for web-based clients")
+    setup_parser.add_argument(
+        "--library-type",
+        choices=["user", "group"],
+        default="user",
+        help="Zotero library type (only needed with --no-local)",
+    )
+    setup_parser.add_argument(
+        "--no-claude",
+        action="store_true",
+        help="Skip Claude Desktop config; write standalone config for web-based clients",
+    )
     setup_parser.add_argument("--config-path", help="Path to Claude Desktop config file")
-    setup_parser.add_argument("--skip-semantic-search", action="store_true",
-                             help="Skip semantic search configuration")
-    setup_parser.add_argument("--semantic-config-only", action="store_true",
-                             help="Only configure semantic search, skip Zotero setup")
+    setup_parser.add_argument("--skip-semantic-search", action="store_true", help="Skip semantic search configuration")
+    setup_parser.add_argument(
+        "--semantic-config-only", action="store_true", help="Only configure semantic search, skip Zotero setup"
+    )
 
     # Update database command
     update_db_parser = subparsers.add_parser("update-db", help="Update semantic search database")
-    update_db_parser.add_argument("--force-rebuild", action="store_true",
-                                 help="Force complete rebuild of the database")
-    update_db_parser.add_argument("--limit", type=int,
-                                 help="Limit number of items to process (for testing)")
-    update_db_parser.add_argument("--fulltext", action="store_true",
-                                 help="Extract fulltext content from local Zotero database (slower but more comprehensive)")
-    update_db_parser.add_argument("--config-path",
-                                 help="Path to semantic search configuration file")
-    update_db_parser.add_argument("--db-path",
-                                 help="Path to Zotero database file (zotero.sqlite), overrides config")
+    update_db_parser.add_argument("--force-rebuild", action="store_true", help="Force complete rebuild of the database")
+    update_db_parser.add_argument("--limit", type=int, help="Limit number of items to process (for testing)")
+    update_db_parser.add_argument(
+        "--fulltext",
+        action="store_true",
+        help="Extract fulltext content from local Zotero database (slower but more comprehensive)",
+    )
+    update_db_parser.add_argument("--config-path", help="Path to semantic search configuration file")
+    update_db_parser.add_argument("--db-path", help="Path to Zotero database file (zotero.sqlite), overrides config")
 
     # Database status command
     db_status_parser = subparsers.add_parser("db-status", help="Show semantic search database status")
-    db_status_parser.add_argument("--config-path",
-                                 help="Path to semantic search configuration file")
+    db_status_parser.add_argument("--config-path", help="Path to semantic search configuration file")
 
     # DB inspect command (sample and filter indexed docs; also supports stats)
-    inspect_parser = subparsers.add_parser("db-inspect", help="Inspect indexed documents or show aggregate stats for the semantic DB")
+    inspect_parser = subparsers.add_parser(
+        "db-inspect", help="Inspect indexed documents or show aggregate stats for the semantic DB"
+    )
     inspect_parser.add_argument("--limit", type=int, default=20, help="How many records to show (default: 20)")
     inspect_parser.add_argument("--filter", dest="filter_text", help="Substring to match in title or creators")
     inspect_parser.add_argument("--show-documents", action="store_true", help="Show beginning of stored document text")
@@ -226,18 +233,17 @@ def main():
 
     # Update command
     update_parser = subparsers.add_parser("update", help="Update zotero-mcp to the latest version")
-    update_parser.add_argument("--check-only", action="store_true",
-                              help="Only check for updates without installing")
-    update_parser.add_argument("--force", action="store_true",
-                              help="Force update even if already up to date")
-    update_parser.add_argument("--method", choices=["pip", "uv", "conda", "pipx"],
-                              help="Override auto-detected installation method")
+    update_parser.add_argument("--check-only", action="store_true", help="Only check for updates without installing")
+    update_parser.add_argument("--force", action="store_true", help="Force update even if already up to date")
+    update_parser.add_argument(
+        "--method", choices=["pip", "uv", "conda", "pipx"], help="Override auto-detected installation method"
+    )
 
     # Version command
-    version_parser = subparsers.add_parser("version", help="Print version information")
+    subparsers.add_parser("version", help="Print version information")
 
     # Setup info command
-    setup_info_parser = subparsers.add_parser("setup-info", help="Show installation path and configuration info for MCP clients")
+    subparsers.add_parser("setup-info", help="Show installation path and configuration info for MCP clients")
 
     args = parser.parse_args()
 
@@ -249,6 +255,7 @@ def main():
 
     if args.command == "version":
         from zotero_mcp._version import __version__
+
         print(f"Zotero MCP v{__version__}")
         sys.exit(0)
 
@@ -269,7 +276,9 @@ def main():
         claude_env_vars = {} if no_claude else load_claude_desktop_env_vars()
 
         # Choose which env to display: prefer standalone if present or if Claude disabled
-        display_env = standalone_env_vars if (no_claude or standalone_env_vars) else (claude_env_vars or {"ZOTERO_LOCAL": "true"})
+        display_env = (
+            standalone_env_vars if (no_claude or standalone_env_vars) else (claude_env_vars or {"ZOTERO_LOCAL": "true"})
+        )
 
         print("=== Zotero MCP Setup Information ===")
         print()
@@ -285,8 +294,12 @@ def main():
                 print("  Installation method: uv tool")
             else:
                 # Check pip
-                result = subprocess.run([sys.executable, "-m", "pip", "show", "zotero-mcp-server"],
-                                      capture_output=True, text=True, timeout=5)
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "show", "zotero-mcp-server"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
                 if result.returncode == 0:
                     print("  Installation method: pip")
                 else:
@@ -309,14 +322,7 @@ def main():
         if not no_claude:
             print()
             print("For Claude Desktop (claude_desktop_config.json):")
-            config_snippet = {
-                "mcpServers": {
-                    "zotero": {
-                        "command": executable_path,
-                        "env": obfuscated_env_vars
-                    }
-                }
-            }
+            config_snippet = {"mcpServers": {"zotero": {"command": executable_path, "env": obfuscated_env_vars}}}
             print(json.dumps(config_snippet, indent=2))
 
         # Show semantic search database info with detailed statistics
@@ -348,7 +354,7 @@ def main():
                 print(f"  Last update: {update_config.get('last_update', 'Never')}")
                 print(f"  Should update: {status.get('should_update', False)}")
 
-                if collection_info.get('error'):
+                if collection_info.get("error"):
                     print(f"  Error: {collection_info['error']}")
 
             except Exception as e:
@@ -362,6 +368,7 @@ def main():
 
     elif args.command == "setup":
         from zotero_mcp.setup_helper import main as setup_main
+
         sys.exit(setup_main(args))
 
     elif args.command == "update-db":
@@ -380,7 +387,7 @@ def main():
         print(f"Using configuration: {config_path}")
 
         # Get optional db_path override from CLI
-        db_path = getattr(args, 'db_path', None)
+        db_path = getattr(args, "db_path", None)
         if db_path:
             print(f"Using custom Zotero database: {db_path}")
             # Save the db_path to config file for future use
@@ -393,6 +400,7 @@ def main():
             print("Starting database update...")
             if args.fulltext:
                 from zotero_mcp.utils import is_local_mode
+
                 if not is_local_mode():
                     print(
                         "Error: --fulltext requires local mode but ZOTERO_LOCAL is not enabled.\n"
@@ -403,12 +411,10 @@ def main():
                     sys.exit(1)
                 print("Extracting full-text content from local Zotero database...")
             stats = search.update_database(
-                force_full_rebuild=args.force_rebuild,
-                limit=args.limit,
-                extract_fulltext=args.fulltext
+                force_full_rebuild=args.force_rebuild, limit=args.limit, extract_fulltext=args.fulltext
             )
 
-            print(f"\nDatabase update completed:")
+            print("\nDatabase update completed:")
             print(f"- Total items: {stats.get('total_items', 0)}")
             print(f"- Processed: {stats.get('processed_items', 0)}")
             print(f"- Added: {stats.get('added_items', 0)}")
@@ -417,7 +423,7 @@ def main():
             print(f"- Errors: {stats.get('errors', 0)}")
             print(f"- Duration: {stats.get('duration', 'Unknown')}")
 
-            if stats.get('error'):
+            if stats.get("error"):
                 print(f"Error: {stats['error']}")
                 sys.exit(1)
 
@@ -454,13 +460,13 @@ def main():
             print(f"Database path: {collection_info.get('persist_directory', 'Unknown')}")
 
             update_config = status.get("update_config", {})
-            print(f"\nUpdate configuration:")
+            print("\nUpdate configuration:")
             print(f"- Auto update: {update_config.get('auto_update', False)}")
             print(f"- Frequency: {update_config.get('update_frequency', 'manual')}")
             print(f"- Last update: {update_config.get('last_update', 'Never')}")
             print(f"- Should update: {status.get('should_update', False)}")
 
-            if collection_info.get('error'):
+            if collection_info.get("error"):
                 print(f"\nError: {collection_info['error']}")
 
         except Exception as e:
@@ -471,8 +477,9 @@ def main():
         # Setup Zotero environment variables
         setup_zotero_environment()
 
-        from zotero_mcp.semantic_search import create_semantic_search
         from collections import Counter
+
+        from zotero_mcp.semantic_search import create_semantic_search
 
         # Determine config path
         config_path = args.config_path
@@ -496,7 +503,7 @@ def main():
                 print(f"Count: {info.get('count')}")
 
                 # Item type distribution
-                item_types = [ (m or {}).get("item_type", "") for m in metas ]
+                item_types = [(m or {}).get("item_type", "") for m in metas]
                 ct_types = Counter(item_types)
                 print("Item types:")
                 for t, c in ct_types.most_common(20):
@@ -521,14 +528,16 @@ def main():
                     print(f"  {t}: {cov['with_fulltext']}/{cov['total']} (pdf:{cov['pdf']}, html:{cov['html']})")
 
                 # Common titles (may indicate duplicates)
-                titles = [ (m or {}).get("title", "") for m in metas ]
+                titles = [(m or {}).get("title", "") for m in metas]
                 from collections import Counter as _Counter
+
                 ct_titles = _Counter([t for t in titles if t])
-                common = [(t,c) for t,c in ct_titles.most_common(10)]
+                common = [(t, c) for t, c in ct_titles.most_common(10)]
                 if common:
                     print("Common titles:")
                     for t, c in common:
-                        print(f"  {t[:80]}{'...' if len(t)>80 else ''}: {c}")
+                        ts = str(t)
+                        print(f"  {ts[:80]}{'...' if len(ts) > 80 else ''}: {c}")
                 return
 
             include = ["metadatas"]
@@ -536,7 +545,7 @@ def main():
                 include.append("documents")
 
             # Fetch up to limit; filter client-side if requested
-            data = col.get(limit=args.limit, include=include)
+            data = col.get(limit=args.limit, include=include)  # type: ignore[arg-type]
 
             print("=== Semantic DB Inspection ===")
             total = client.get_collection_info().get("count", 0)
@@ -544,7 +553,7 @@ def main():
             print(f"Showing up to: {args.limit}")
 
             shown = 0
-            for i, meta in enumerate(data.get("metadatas", [])):
+            for i, meta in enumerate(data.get("metadatas") or []):
                 meta = meta or {}
                 title = meta.get("title", "")
                 creators = meta.get("creators", "")
@@ -575,15 +584,11 @@ def main():
         try:
             print("Checking for updates...")
 
-            result = update_zotero_mcp(
-                check_only=args.check_only,
-                force=args.force,
-                method=args.method
-            )
+            result = update_zotero_mcp(check_only=args.check_only, force=args.force, method=args.method)
 
-            print("\n" + "="*50)
+            print("\n" + "=" * 50)
             print("UPDATE RESULTS")
-            print("="*50)
+            print("=" * 50)
 
             if args.check_only:
                 print(f"Current version: {result.get('current_version', 'Unknown')}")
@@ -591,9 +596,11 @@ def main():
                 print(f"Update needed: {result.get('needs_update', False)}")
                 print(f"Status: {result.get('message', 'Unknown')}")
             else:
-                if result.get('success'):
+                if result.get("success"):
                     print("✅ Update completed successfully!")
-                    print(f"Version: {result.get('current_version', 'Unknown')} → {result.get('latest_version', 'Unknown')}")
+                    print(
+                        f"Version: {result.get('current_version', 'Unknown')} → {result.get('latest_version', 'Unknown')}"
+                    )
                     print(f"Method: {result.get('method', 'Unknown')}")
                     print(f"Message: {result.get('message', '')}")
 
@@ -606,7 +613,7 @@ def main():
                     print("❌ Update failed!")
                     print(f"Error: {result.get('message', 'Unknown error')}")
 
-                    if backup_dir := result.get('backup_dir'):
+                    if backup_dir := result.get("backup_dir"):
                         print(f"\n🔄 Backup created at: {backup_dir}")
                         print("You can manually restore configurations if needed")
 
@@ -619,6 +626,7 @@ def main():
     elif args.command == "serve":
         # Lazy import — triggers heavy dependencies (FastMCP, ChromaDB, etc.)
         from zotero_mcp.server import mcp
+
         # Get transport with a default value if not specified
         transport = getattr(args, "transport", "stdio")
         # Ensure environment is initialized (Claude config or standalone config)
@@ -633,7 +641,11 @@ def main():
             host = getattr(args, "host", "localhost")
             port = getattr(args, "port", 8000)
             import warnings
-            warnings.warn("The SSE transport is deprecated and may be removed in a future version. New applications should use Streamable HTTP transport instead.", UserWarning)
+
+            warnings.warn(
+                "The SSE transport is deprecated and may be removed in a future version. New applications should use Streamable HTTP transport instead.",
+                UserWarning,
+            )
             mcp.run(transport="sse", host=host, port=port)
 
 

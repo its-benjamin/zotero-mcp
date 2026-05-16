@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a problem with Zotero MCP
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to trigger the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include exact error messages or stack traces.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: zotero-mcp version
+      description: Output of `zotero-mcp version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - Local (ZOTERO_LOCAL=true)
+        - Web API
+        - Hybrid (local read + web write)
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Python version, MCP client (Claude Desktop, ChatGPT, etc.).
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Run with `ZOTERO_MCP_LOG_LEVEL=DEBUG` if possible. Redact secrets.
+      render: shell
