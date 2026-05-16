@@ -2,16 +2,17 @@
 
 import sys
 import types
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import patch, MagicMock, PropertyMock
+from conftest import FakeZotero
 
 from zotero_mcp import server
-from conftest import DummyContext, FakeZotero, _FakeResponse
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 class FakeZoteroForFile(FakeZotero):
     """FakeZotero extended with attachment_both stub."""
@@ -114,8 +115,10 @@ def _patch_fitz(monkeypatch, doc):
 # Happy path: PDF file exists, no DOI found, creates document + attachment
 # ---------------------------------------------------------------------------
 
+
 class TestHappyPathNoDoi:
-    def test_creates_document_item_and_attachment(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_creates_document_item_and_attachment(self, monkeypatch, dummy_ctx):
         fake_zot = FakeZoteroForFile()
         _patch_path_valid(monkeypatch)
         _patch_hybrid_mode(monkeypatch, fake_zot)
@@ -124,7 +127,7 @@ class TestHappyPathNoDoi:
         fake_doc = FakeFitzDocument(metadata={"subject": "", "keywords": ""}, first_page_text="No doi here.")
         _patch_fitz(monkeypatch, fake_doc)
 
-        result = server.add_from_file(
+        await server.add_from_file(
             file_path="/Users/test/Documents/paper.pdf",
             title="My Paper",
             item_type="document",
@@ -145,7 +148,8 @@ class TestHappyPathNoDoi:
         assert att["files"][0] == ("paper.pdf", "/Users/test/Documents/paper.pdf")
         assert att["parentid"] is not None
 
-    def test_uses_filename_as_title_when_none(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_uses_filename_as_title_when_none(self, monkeypatch, dummy_ctx):
         fake_zot = FakeZoteroForFile()
         _patch_path_valid(monkeypatch)
         _patch_hybrid_mode(monkeypatch, fake_zot)
@@ -153,7 +157,7 @@ class TestHappyPathNoDoi:
         fake_doc = FakeFitzDocument(metadata={}, first_page_text="Some text without DOI.")
         _patch_fitz(monkeypatch, fake_doc)
 
-        result = server.add_from_file(
+        await server.add_from_file(
             file_path="/Users/test/Documents/report.pdf",
             title=None,
             item_type="document",
@@ -173,8 +177,10 @@ class TestHappyPathNoDoi:
 # DOI extraction from PDF metadata -> delegates to add_by_doi logic
 # ---------------------------------------------------------------------------
 
+
 class TestDoiFromMetadata:
-    def test_doi_in_subject_field(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_doi_in_subject_field(self, monkeypatch, dummy_ctx):
         fake_zot = FakeZoteroForFile()
         _patch_path_valid(monkeypatch)
         _patch_hybrid_mode(monkeypatch, fake_zot)
@@ -196,7 +202,7 @@ class TestDoiFromMetadata:
 
         monkeypatch.setattr("zotero_mcp.tools.write.add_by_doi", mock_add_by_doi)
 
-        result = server.add_from_file(
+        await server.add_from_file(
             file_path="/Users/test/Documents/paper.pdf",
             title=None,
             item_type="document",
@@ -209,7 +215,8 @@ class TestDoiFromMetadata:
         assert doi_called_with["collections"] == ["COL001"]
         assert doi_called_with["tags"] == ["tag1"]
 
-    def test_doi_in_keywords_field(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_doi_in_keywords_field(self, monkeypatch, dummy_ctx):
         fake_zot = FakeZoteroForFile()
         _patch_path_valid(monkeypatch)
         _patch_hybrid_mode(monkeypatch, fake_zot)
@@ -230,7 +237,7 @@ class TestDoiFromMetadata:
 
         monkeypatch.setattr("zotero_mcp.tools.write.add_by_doi", mock_add_by_doi)
 
-        server.add_from_file(
+        await server.add_from_file(
             file_path="/Users/test/Documents/paper.pdf",
             title=None,
             item_type="document",
@@ -246,17 +253,15 @@ class TestDoiFromMetadata:
 # DOI extraction from first page text
 # ---------------------------------------------------------------------------
 
+
 class TestDoiFromFirstPageText:
-    def test_doi_in_first_page_text(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_doi_in_first_page_text(self, monkeypatch, dummy_ctx):
         fake_zot = FakeZoteroForFile()
         _patch_path_valid(monkeypatch)
         _patch_hybrid_mode(monkeypatch, fake_zot)
 
-        first_page = (
-            "Journal of Example Studies, Vol 5\n"
-            "DOI: 10.1000/xyz123\n"
-            "Abstract: This paper discusses..."
-        )
+        first_page = "Journal of Example Studies, Vol 5\nDOI: 10.1000/xyz123\nAbstract: This paper discusses..."
         fake_doc = FakeFitzDocument(
             metadata={"subject": "", "keywords": ""},
             first_page_text=first_page,
@@ -271,7 +276,7 @@ class TestDoiFromFirstPageText:
 
         monkeypatch.setattr("zotero_mcp.tools.write.add_by_doi", mock_add_by_doi)
 
-        server.add_from_file(
+        await server.add_from_file(
             file_path="/Users/test/Documents/paper.pdf",
             title=None,
             item_type="document",
@@ -282,7 +287,8 @@ class TestDoiFromFirstPageText:
 
         assert doi_captured["doi"] == "10.1000/xyz123"
 
-    def test_no_doi_anywhere_falls_back_to_manual_item(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_no_doi_anywhere_falls_back_to_manual_item(self, monkeypatch, dummy_ctx):
         """When no DOI is found in metadata or text, create a plain document item."""
         fake_zot = FakeZoteroForFile()
         _patch_path_valid(monkeypatch)
@@ -304,7 +310,7 @@ class TestDoiFromFirstPageText:
 
         monkeypatch.setattr("zotero_mcp.tools.write.add_by_doi", mock_add_by_doi)
 
-        server.add_from_file(
+        await server.add_from_file(
             file_path="/Users/test/Documents/paper.pdf",
             title="Manual Title",
             item_type="document",
@@ -322,13 +328,15 @@ class TestDoiFromFirstPageText:
 # Invalid file extension -> error
 # ---------------------------------------------------------------------------
 
+
 class TestInvalidFileExtension:
-    def test_rejects_exe_extension(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_rejects_exe_extension(self, monkeypatch, dummy_ctx):
         fake_zot = FakeZoteroForFile()
         _patch_path_valid(monkeypatch)
         _patch_hybrid_mode(monkeypatch, fake_zot)
 
-        result = server.add_from_file(
+        result = await server.add_from_file(
             file_path="/Users/test/Documents/malware.exe",
             title="Bad File",
             item_type="document",
@@ -339,12 +347,13 @@ class TestInvalidFileExtension:
 
         assert "error" in result.lower() or "unsupported" in result.lower() or "extension" in result.lower()
 
-    def test_rejects_txt_extension(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_rejects_txt_extension(self, monkeypatch, dummy_ctx):
         fake_zot = FakeZoteroForFile()
         _patch_path_valid(monkeypatch)
         _patch_hybrid_mode(monkeypatch, fake_zot)
 
-        result = server.add_from_file(
+        result = await server.add_from_file(
             file_path="/Users/test/Documents/notes.txt",
             title="Text File",
             item_type="document",
@@ -355,7 +364,8 @@ class TestInvalidFileExtension:
 
         assert "error" in result.lower() or "unsupported" in result.lower() or "extension" in result.lower()
 
-    def test_accepts_pdf_extension(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_accepts_pdf_extension(self, monkeypatch, dummy_ctx):
         """PDF should be accepted (not rejected at extension check)."""
         fake_zot = FakeZoteroForFile()
         _patch_path_valid(monkeypatch)
@@ -364,7 +374,7 @@ class TestInvalidFileExtension:
         fake_doc = FakeFitzDocument(metadata={}, first_page_text="No DOI.")
         _patch_fitz(monkeypatch, fake_doc)
 
-        result = server.add_from_file(
+        result = await server.add_from_file(
             file_path="/Users/test/Documents/paper.pdf",
             title="Good PDF",
             item_type="document",
@@ -376,7 +386,8 @@ class TestInvalidFileExtension:
         # Should not contain an extension error
         assert "unsupported" not in result.lower() or "extension" not in result.lower()
 
-    def test_accepts_epub_extension(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_accepts_epub_extension(self, monkeypatch, dummy_ctx):
         """EPUB should be accepted."""
         fake_zot = FakeZoteroForFile()
         _patch_path_valid(monkeypatch)
@@ -387,7 +398,7 @@ class TestInvalidFileExtension:
         fake_doc = FakeFitzDocument(metadata={}, first_page_text="")
         _patch_fitz(monkeypatch, fake_doc)
 
-        result = server.add_from_file(
+        result = await server.add_from_file(
             file_path="/Users/test/Documents/book.epub",
             title="Good EPUB",
             item_type="document",
@@ -403,8 +414,10 @@ class TestInvalidFileExtension:
 # File doesn't exist -> error
 # ---------------------------------------------------------------------------
 
+
 class TestFileDoesNotExist:
-    def test_nonexistent_file(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_nonexistent_file(self, monkeypatch, dummy_ctx):
         fake_zot = FakeZoteroForFile()
         _patch_hybrid_mode(monkeypatch, fake_zot)
         monkeypatch.setattr("os.path.isabs", lambda p: True)
@@ -412,7 +425,7 @@ class TestFileDoesNotExist:
         monkeypatch.setattr("os.path.isfile", lambda p: False)
         monkeypatch.setattr("os.path.islink", lambda p: False)
 
-        result = server.add_from_file(
+        result = await server.add_from_file(
             file_path="/Users/test/Documents/nonexistent.pdf",
             title="Ghost File",
             item_type="document",
@@ -423,7 +436,8 @@ class TestFileDoesNotExist:
 
         assert "not found" in result.lower() or "does not exist" in result.lower() or "error" in result.lower()
 
-    def test_path_is_directory_not_file(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_path_is_directory_not_file(self, monkeypatch, dummy_ctx):
         fake_zot = FakeZoteroForFile()
         _patch_hybrid_mode(monkeypatch, fake_zot)
         monkeypatch.setattr("os.path.isabs", lambda p: True)
@@ -431,7 +445,7 @@ class TestFileDoesNotExist:
         monkeypatch.setattr("os.path.isfile", lambda p: False)
         monkeypatch.setattr("os.path.islink", lambda p: False)
 
-        result = server.add_from_file(
+        result = await server.add_from_file(
             file_path="/Users/test/Documents/",
             title="Not a file",
             item_type="document",
@@ -447,13 +461,15 @@ class TestFileDoesNotExist:
 # Non-absolute path -> error
 # ---------------------------------------------------------------------------
 
+
 class TestNonAbsolutePath:
-    def test_relative_path_rejected(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_relative_path_rejected(self, monkeypatch, dummy_ctx):
         fake_zot = FakeZoteroForFile()
         _patch_hybrid_mode(monkeypatch, fake_zot)
         monkeypatch.setattr("os.path.isabs", lambda p: False)
 
-        result = server.add_from_file(
+        result = await server.add_from_file(
             file_path="relative/path/paper.pdf",
             title="Relative",
             item_type="document",
@@ -464,12 +480,13 @@ class TestNonAbsolutePath:
 
         assert "absolute" in result.lower() or "error" in result.lower()
 
-    def test_dot_relative_path_rejected(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_dot_relative_path_rejected(self, monkeypatch, dummy_ctx):
         fake_zot = FakeZoteroForFile()
         _patch_hybrid_mode(monkeypatch, fake_zot)
         monkeypatch.setattr("os.path.isabs", lambda p: not p.startswith("."))
 
-        result = server.add_from_file(
+        result = await server.add_from_file(
             file_path="./Documents/paper.pdf",
             title="Dot Relative",
             item_type="document",
@@ -485,8 +502,10 @@ class TestNonAbsolutePath:
 # Path validation: reject symlinks (security)
 # ---------------------------------------------------------------------------
 
+
 class TestSymlinkRejection:
-    def test_symlink_rejected(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_symlink_rejected(self, monkeypatch, dummy_ctx):
         fake_zot = FakeZoteroForFile()
         _patch_hybrid_mode(monkeypatch, fake_zot)
         monkeypatch.setattr("os.path.isabs", lambda p: True)
@@ -494,7 +513,7 @@ class TestSymlinkRejection:
         monkeypatch.setattr("os.path.isfile", lambda p: True)
         monkeypatch.setattr("os.path.islink", lambda p: True)
 
-        result = server.add_from_file(
+        result = await server.add_from_file(
             file_path="/Users/test/Documents/symlink_paper.pdf",
             title="Symlink File",
             item_type="document",
@@ -510,8 +529,10 @@ class TestSymlinkRejection:
 # Hybrid mode / local-only rejection
 # ---------------------------------------------------------------------------
 
+
 class TestHybridModeRejection:
-    def test_local_only_mode_returns_error(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_local_only_mode_returns_error(self, monkeypatch, dummy_ctx):
         """In local-only mode (no web credentials), write operations should fail."""
         _patch_path_valid(monkeypatch)
 
@@ -527,7 +548,7 @@ class TestHybridModeRejection:
         fake_doc = FakeFitzDocument(metadata={}, first_page_text="No DOI.")
         _patch_fitz(monkeypatch, fake_doc)
 
-        result = server.add_from_file(
+        result = await server.add_from_file(
             file_path="/Users/test/Documents/paper.pdf",
             title="Local Only",
             item_type="document",
@@ -538,7 +559,8 @@ class TestHybridModeRejection:
 
         assert "local-only" in result.lower() or "write operations" in result.lower()
 
-    def test_hybrid_mode_uses_write_client(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_hybrid_mode_uses_write_client(self, monkeypatch, dummy_ctx):
         """Verify that attachment_both is called on the write client, not the read client."""
         write_zot = FakeZoteroForFile()
         read_zot = FakeZoteroForFile()
@@ -551,7 +573,7 @@ class TestHybridModeRejection:
         fake_doc = FakeFitzDocument(metadata={}, first_page_text="No DOI.")
         _patch_fitz(monkeypatch, fake_doc)
 
-        server.add_from_file(
+        await server.add_from_file(
             file_path="/Users/test/Documents/paper.pdf",
             title="Hybrid Test",
             item_type="document",
@@ -572,8 +594,10 @@ class TestHybridModeRejection:
 # Tags and collections applied
 # ---------------------------------------------------------------------------
 
+
 class TestTagsAndCollections:
-    def test_tags_applied_to_created_item(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_tags_applied_to_created_item(self, monkeypatch, dummy_ctx):
         fake_zot = FakeZoteroForFile()
         _patch_path_valid(monkeypatch)
         _patch_hybrid_mode(monkeypatch, fake_zot)
@@ -581,7 +605,7 @@ class TestTagsAndCollections:
         fake_doc = FakeFitzDocument(metadata={}, first_page_text="No DOI here.")
         _patch_fitz(monkeypatch, fake_doc)
 
-        server.add_from_file(
+        await server.add_from_file(
             file_path="/Users/test/Documents/paper.pdf",
             title="Tagged Paper",
             item_type="document",
@@ -596,7 +620,8 @@ class TestTagsAndCollections:
         assert "machine-learning" in tag_names
         assert "review" in tag_names
 
-    def test_collections_applied_to_created_item(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_collections_applied_to_created_item(self, monkeypatch, dummy_ctx):
         fake_zot = FakeZoteroForFile()
         _patch_path_valid(monkeypatch)
         _patch_hybrid_mode(monkeypatch, fake_zot)
@@ -604,7 +629,7 @@ class TestTagsAndCollections:
         fake_doc = FakeFitzDocument(metadata={}, first_page_text="No DOI here.")
         _patch_fitz(monkeypatch, fake_doc)
 
-        server.add_from_file(
+        await server.add_from_file(
             file_path="/Users/test/Documents/paper.pdf",
             title="Collected Paper",
             item_type="document",
@@ -618,7 +643,8 @@ class TestTagsAndCollections:
         assert "COLKEY01" in created_item.get("collections", [])
         assert "COLKEY02" in created_item.get("collections", [])
 
-    def test_tags_and_collections_together(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_tags_and_collections_together(self, monkeypatch, dummy_ctx):
         fake_zot = FakeZoteroForFile()
         _patch_path_valid(monkeypatch)
         _patch_hybrid_mode(monkeypatch, fake_zot)
@@ -626,7 +652,7 @@ class TestTagsAndCollections:
         fake_doc = FakeFitzDocument(metadata={}, first_page_text="No DOI.")
         _patch_fitz(monkeypatch, fake_doc)
 
-        server.add_from_file(
+        await server.add_from_file(
             file_path="/Users/test/Documents/paper.pdf",
             title="Both",
             item_type="document",
@@ -639,7 +665,8 @@ class TestTagsAndCollections:
         assert "COL001" in created_item.get("collections", [])
         assert {"tag": "tag1"} in created_item.get("tags", [])
 
-    def test_tags_passed_as_comma_string(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_tags_passed_as_comma_string(self, monkeypatch, dummy_ctx):
         """Tags can arrive as a comma-separated string from LLMs."""
         fake_zot = FakeZoteroForFile()
         _patch_path_valid(monkeypatch)
@@ -648,7 +675,7 @@ class TestTagsAndCollections:
         fake_doc = FakeFitzDocument(metadata={}, first_page_text="No DOI.")
         _patch_fitz(monkeypatch, fake_doc)
 
-        server.add_from_file(
+        await server.add_from_file(
             file_path="/Users/test/Documents/paper.pdf",
             title="Comma Tags",
             item_type="document",
@@ -668,8 +695,10 @@ class TestTagsAndCollections:
 # Uses attachment_both (not attachment_simple)
 # ---------------------------------------------------------------------------
 
+
 class TestAttachmentBoth:
-    def test_calls_attachment_both_not_simple(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_calls_attachment_both_not_simple(self, monkeypatch, dummy_ctx):
         """Verify attachment_both is called with correct (basename, full_path) tuple."""
         fake_zot = FakeZoteroForFile()
         _patch_path_valid(monkeypatch)
@@ -678,7 +707,7 @@ class TestAttachmentBoth:
         fake_doc = FakeFitzDocument(metadata={}, first_page_text="No DOI.")
         _patch_fitz(monkeypatch, fake_doc)
 
-        server.add_from_file(
+        await server.add_from_file(
             file_path="/Users/test/Documents/my_paper.pdf",
             title="Attachment Test",
             item_type="document",
@@ -696,7 +725,8 @@ class TestAttachmentBoth:
         assert basename == "my_paper.pdf"
         assert full_path == "/Users/test/Documents/my_paper.pdf"
 
-    def test_attachment_both_receives_parent_item_key(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_attachment_both_receives_parent_item_key(self, monkeypatch, dummy_ctx):
         """The parentid kwarg should be the key of the newly created item."""
         fake_zot = FakeZoteroForFile()
         _patch_path_valid(monkeypatch)
@@ -705,7 +735,7 @@ class TestAttachmentBoth:
         fake_doc = FakeFitzDocument(metadata={}, first_page_text="No DOI.")
         _patch_fitz(monkeypatch, fake_doc)
 
-        server.add_from_file(
+        await server.add_from_file(
             file_path="/Users/test/Documents/paper.pdf",
             title="Parent Key Test",
             item_type="document",
@@ -719,12 +749,11 @@ class TestAttachmentBoth:
         # create_items returns {"success": {"0": "KEY0000"}} from FakeZotero
         assert parent_id == "KEY0000"
 
-    def test_attachment_simple_not_used(self, monkeypatch, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_attachment_simple_not_used(self, monkeypatch, dummy_ctx):
         """Ensure attachment_simple is never called (it stores full paths as filenames)."""
         fake_zot = FakeZoteroForFile()
-        fake_zot.attachment_simple = MagicMock(side_effect=AssertionError(
-            "attachment_simple should not be called"
-        ))
+        fake_zot.attachment_simple = MagicMock(side_effect=AssertionError("attachment_simple should not be called"))
         _patch_path_valid(monkeypatch)
         _patch_hybrid_mode(monkeypatch, fake_zot)
 
@@ -732,7 +761,7 @@ class TestAttachmentBoth:
         _patch_fitz(monkeypatch, fake_doc)
 
         # Should complete without raising AssertionError
-        server.add_from_file(
+        await server.add_from_file(
             file_path="/Users/test/Documents/paper.pdf",
             title="No Simple",
             item_type="document",

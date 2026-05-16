@@ -1,14 +1,16 @@
+import pytest
+
 from zotero_mcp import server
 
 
 class DummyContext:
-    def info(self, *_args, **_kwargs):
+    async def info(self, *_args, **_kwargs):
         return None
 
-    def error(self, *_args, **_kwargs):
+    async def error(self, *_args, **_kwargs):
         return None
 
-    def warning(self, *_args, **_kwargs):
+    async def warning(self, *_args, **_kwargs):
         return None
 
 
@@ -51,7 +53,8 @@ class FakeZoteroForTags:
         return {"success": True}
 
 
-def test_search_notes_filters_by_query(monkeypatch):
+@pytest.mark.asyncio
+async def test_search_notes_filters_by_query(monkeypatch):
     """Notes and annotations are filtered by query text; unrelated items excluded."""
     notes = [
         {
@@ -104,7 +107,7 @@ def test_search_notes_filters_by_query(monkeypatch):
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake_zot)
     monkeypatch.setattr("zotero_mcp.utils.is_local_mode", lambda: False)
 
-    result = server.search_notes(query="quantum", limit=20, ctx=DummyContext())
+    result = await server.search_notes(query="quantum", limit=20, ctx=DummyContext())
 
     # Quantum note and annotation should appear
     assert "NOTE0001" in result
@@ -114,7 +117,8 @@ def test_search_notes_filters_by_query(monkeypatch):
     assert "ANNO0002" not in result
 
 
-def test_search_notes_note_results_survive_annotation_crash(monkeypatch):
+@pytest.mark.asyncio
+async def test_search_notes_note_results_survive_annotation_crash(monkeypatch):
     """If annotation search crashes, note results are still returned."""
     notes = [
         {
@@ -131,8 +135,6 @@ def test_search_notes_note_results_survive_annotation_crash(monkeypatch):
         "ITEM0001": {"data": {"title": "Mindfulness Paper"}},
     }
 
-    call_count = [0]
-
     class CrashingAnnotationZot(FakeZoteroForNotes):
         def items(self, **kwargs):
             item_type = kwargs.get("itemType") or self.params.get("itemType")
@@ -144,7 +146,7 @@ def test_search_notes_note_results_survive_annotation_crash(monkeypatch):
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake_zot)
     monkeypatch.setattr("zotero_mcp.utils.is_local_mode", lambda: False)
 
-    result = server.search_notes(query="mindfulness", limit=20, ctx=DummyContext())
+    result = await server.search_notes(query="mindfulness", limit=20, ctx=DummyContext())
 
     # Note results should still be returned despite annotation crash
     assert "NOTE0001" in result
@@ -212,27 +214,30 @@ _HTML_NOTE = {
 }
 
 
-def test_get_notes_strips_html_by_default(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_notes_strips_html_by_default(monkeypatch):
     fake = FakeZoteroForGetNotes([_HTML_NOTE])
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
 
-    result = server.get_notes(item_key="ITEM0001", ctx=DummyContext())
+    result = await server.get_notes(item_key="ITEM0001", ctx=DummyContext())
 
     assert "<p>" not in result
     assert "<strong>" not in result
     assert "Hello" in result and "world" in result
 
 
-def test_get_notes_raw_html_preserves_tags(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_notes_raw_html_preserves_tags(monkeypatch):
     fake = FakeZoteroForGetNotes([_HTML_NOTE])
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
 
-    result = server.get_notes(item_key="ITEM0001", raw_html=True, ctx=DummyContext())
+    result = await server.get_notes(item_key="ITEM0001", raw_html=True, ctx=DummyContext())
 
     assert "<p>Hello <strong>world</strong>.</p>" in result
 
 
-def test_search_notes_raw_html_preserves_tags(monkeypatch):
+@pytest.mark.asyncio
+async def test_search_notes_raw_html_preserves_tags(monkeypatch):
     notes = [
         {
             "key": "NOTE0001",
@@ -249,42 +254,39 @@ def test_search_notes_raw_html_preserves_tags(monkeypatch):
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
     monkeypatch.setattr("zotero_mcp.utils.is_local_mode", lambda: False)
 
-    result = server.search_notes(
-        query="quantum", limit=20, raw_html=True, ctx=DummyContext()
-    )
+    result = await server.search_notes(query="quantum", limit=20, raw_html=True, ctx=DummyContext())
 
     assert "<em>quantum</em>" in result
     # Query matching uses stripped text, so this note is still found.
     assert "NOTE0001" in result
 
 
-def test_update_note_replaces_content(monkeypatch):
+@pytest.mark.asyncio
+async def test_update_note_replaces_content(monkeypatch):
     fake = FakeZoteroForNoteUpdate({"NOTE0001": _note_item("NOTE0001", "<p>old</p>")})
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
     monkeypatch.setattr("zotero_mcp.utils.is_local_mode", lambda: False)
 
-    result = server.update_note(
-        item_key="NOTE0001", note_text="<p>new</p>", append=False, ctx=DummyContext()
-    )
+    result = await server.update_note(item_key="NOTE0001", note_text="<p>new</p>", append=False, ctx=DummyContext())
 
     assert "Successfully updated" in result
     assert fake.updated[0]["data"]["note"] == "<p>new</p>"
 
 
-def test_update_note_appends_content(monkeypatch):
+@pytest.mark.asyncio
+async def test_update_note_appends_content(monkeypatch):
     fake = FakeZoteroForNoteUpdate({"NOTE0001": _note_item("NOTE0001", "<p>old</p>")})
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
     monkeypatch.setattr("zotero_mcp.utils.is_local_mode", lambda: False)
 
-    result = server.update_note(
-        item_key="NOTE0001", note_text="<p>more</p>", append=True, ctx=DummyContext()
-    )
+    result = await server.update_note(item_key="NOTE0001", note_text="<p>more</p>", append=True, ctx=DummyContext())
 
     assert "Successfully updated" in result
     assert fake.updated[0]["data"]["note"] == "<p>old</p><p>more</p>"
 
 
-def test_update_note_rejects_non_note(monkeypatch):
+@pytest.mark.asyncio
+async def test_update_note_rejects_non_note(monkeypatch):
     parent = {
         "key": "ITEM0001",
         "data": {"key": "ITEM0001", "version": 1, "itemType": "journalArticle"},
@@ -293,22 +295,19 @@ def test_update_note_rejects_non_note(monkeypatch):
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
     monkeypatch.setattr("zotero_mcp.utils.is_local_mode", lambda: False)
 
-    result = server.update_note(
-        item_key="ITEM0001", note_text="<p>x</p>", append=False, ctx=DummyContext()
-    )
+    result = await server.update_note(item_key="ITEM0001", note_text="<p>x</p>", append=False, ctx=DummyContext())
 
     assert "is not a note" in result
     assert fake.updated == []
 
 
-def test_update_note_missing_key(monkeypatch):
+@pytest.mark.asyncio
+async def test_update_note_missing_key(monkeypatch):
     fake = FakeZoteroForNoteUpdate({})
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
     monkeypatch.setattr("zotero_mcp.utils.is_local_mode", lambda: False)
 
-    result = server.update_note(
-        item_key="ZZZZZZZZ", note_text="<p>x</p>", append=False, ctx=DummyContext()
-    )
+    result = await server.update_note(item_key="ZZZZZZZZ", note_text="<p>x</p>", append=False, ctx=DummyContext())
 
     assert "No item found" in result
     assert fake.updated == []
@@ -345,7 +344,8 @@ class FakeZoteroForDeleteNote:
         return self._items[key]
 
 
-def test_delete_note_trashes_via_patch(monkeypatch):
+@pytest.mark.asyncio
+async def test_delete_note_trashes_via_patch(monkeypatch):
     note = {
         "key": "NOTE0001",
         "version": 42,
@@ -355,7 +355,7 @@ def test_delete_note_trashes_via_patch(monkeypatch):
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
     monkeypatch.setattr("zotero_mcp.utils.is_local_mode", lambda: False)
 
-    result = server.delete_note(item_key="NOTE0001", ctx=DummyContext())
+    result = await server.delete_note(item_key="NOTE0001", ctx=DummyContext())
 
     assert "Successfully trashed" in result
     assert len(fake.client.calls) == 1
@@ -365,7 +365,8 @@ def test_delete_note_trashes_via_patch(monkeypatch):
     assert '"deleted": 1' in call["content"]
 
 
-def test_delete_note_rejects_non_note(monkeypatch):
+@pytest.mark.asyncio
+async def test_delete_note_rejects_non_note(monkeypatch):
     parent = {
         "key": "ITEM0001",
         "version": 1,
@@ -375,24 +376,26 @@ def test_delete_note_rejects_non_note(monkeypatch):
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
     monkeypatch.setattr("zotero_mcp.utils.is_local_mode", lambda: False)
 
-    result = server.delete_note(item_key="ITEM0001", ctx=DummyContext())
+    result = await server.delete_note(item_key="ITEM0001", ctx=DummyContext())
 
     assert "is not a note" in result
     assert fake.client.calls == []
 
 
-def test_delete_note_missing_key(monkeypatch):
+@pytest.mark.asyncio
+async def test_delete_note_missing_key(monkeypatch):
     fake = FakeZoteroForDeleteNote({})
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
     monkeypatch.setattr("zotero_mcp.utils.is_local_mode", lambda: False)
 
-    result = server.delete_note(item_key="ZZZZZZZZ", ctx=DummyContext())
+    result = await server.delete_note(item_key="ZZZZZZZZ", ctx=DummyContext())
 
     assert "No item found" in result
     assert fake.client.calls == []
 
 
-def test_delete_note_http_error(monkeypatch):
+@pytest.mark.asyncio
+async def test_delete_note_http_error(monkeypatch):
     note = {
         "key": "NOTE0001",
         "version": 5,
@@ -403,13 +406,14 @@ def test_delete_note_http_error(monkeypatch):
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake)
     monkeypatch.setattr("zotero_mcp.utils.is_local_mode", lambda: False)
 
-    result = server.delete_note(item_key="NOTE0001", ctx=DummyContext())
+    result = await server.delete_note(item_key="NOTE0001", ctx=DummyContext())
 
     assert "Failed to trash" in result
     assert "412" in result
 
 
-def test_batch_update_tags_validates_json_array(monkeypatch):
+@pytest.mark.asyncio
+async def test_batch_update_tags_validates_json_array(monkeypatch):
     items = [
         {
             "key": "ITEM0001",
@@ -421,7 +425,7 @@ def test_batch_update_tags_validates_json_array(monkeypatch):
     ]
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: FakeZoteroForTags(items))
 
-    result = server.batch_update_tags(
+    result = await server.batch_update_tags(
         query="anything",
         add_tags='{"not":"a-list"}',
         remove_tags=None,

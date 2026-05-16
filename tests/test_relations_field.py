@@ -12,9 +12,16 @@ from unittest.mock import MagicMock
 
 # Stub out heavy optional dependencies so client.py can be imported in isolation
 for _mod_name in (
-    "markitdown", "pyzotero", "pyzotero.zotero",
-    "dotenv", "fastmcp", "mcp", "mcp.server",
-    "zotero_mcp", "zotero_mcp.utils", "zotero_mcp._app",
+    "markitdown",
+    "pyzotero",
+    "pyzotero.zotero",
+    "dotenv",
+    "fastmcp",
+    "mcp",
+    "mcp.server",
+    "zotero_mcp",
+    "zotero_mcp.utils",
+    "zotero_mcp._app",
 ):
     if _mod_name not in sys.modules:
         sys.modules[_mod_name] = MagicMock()
@@ -53,6 +60,7 @@ RELATED_KEY = "ABCD1234"
 # format_item_metadata (markdown)
 # ---------------------------------------------------------------------------
 
+
 class TestFormatItemMetadataRelations:
     def test_single_relation_appears_in_output(self):
         item = _make_item(relations={"dc:relation": [RELATED_URI]})
@@ -90,6 +98,7 @@ class TestFormatItemMetadataRelations:
 # ---------------------------------------------------------------------------
 # generate_bibtex — relations must NOT appear (non-standard field)
 # ---------------------------------------------------------------------------
+
 
 class TestGenerateBibtexRelations:
     def test_related_field_absent_when_relations_present(self):

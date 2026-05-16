@@ -22,9 +22,16 @@ import sys
 from unittest.mock import MagicMock
 
 for _mod_name in (
-    "markitdown", "pyzotero", "pyzotero.zotero",
-    "dotenv", "fastmcp", "mcp", "mcp.server",
-    "zotero_mcp", "zotero_mcp.utils", "zotero_mcp._app",
+    "markitdown",
+    "pyzotero",
+    "pyzotero.zotero",
+    "dotenv",
+    "fastmcp",
+    "mcp",
+    "mcp.server",
+    "zotero_mcp",
+    "zotero_mcp.utils",
+    "zotero_mcp._app",
 ):
     if _mod_name not in sys.modules:
         sys.modules[_mod_name] = MagicMock()
@@ -59,6 +66,7 @@ def _make_item(deleted=None, collections=None, extra=None):
 # Trash status
 # ---------------------------------------------------------------------------
 
+
 class TestTrashStatus:
     def test_trashed_item_shows_in_trash(self):
         item = _make_item(deleted=1)
@@ -89,6 +97,7 @@ class TestTrashStatus:
 # ---------------------------------------------------------------------------
 # Collections listing
 # ---------------------------------------------------------------------------
+
 
 class TestCollectionsListing:
     def test_collection_keys_are_listed(self):

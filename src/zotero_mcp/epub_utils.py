@@ -161,22 +161,22 @@ class TextSearchResult:
     matched_text: str
 
 
-
 # =============================================================================
 # Text Normalization
 # =============================================================================
 
 # HTML entities that need to be replaced before parsing
 HTML_ENTITY_REPLACEMENTS = {
-    "&nbsp;": "\u00A0",    # Non-breaking space
-    "&mdash;": "\u2014",   # Em dash
-    "&ndash;": "\u2013",   # En dash
-    "&lsquo;": "\u2018",   # Left single quote
-    "&rsquo;": "\u2019",   # Right single quote
-    "&ldquo;": "\u201C",   # Left double quote
-    "&rdquo;": "\u201D",   # Right double quote
+    "&nbsp;": "\u00a0",  # Non-breaking space
+    "&mdash;": "\u2014",  # Em dash
+    "&ndash;": "\u2013",  # En dash
+    "&lsquo;": "\u2018",  # Left single quote
+    "&rsquo;": "\u2019",  # Right single quote
+    "&ldquo;": "\u201c",  # Left double quote
+    "&rdquo;": "\u201d",  # Right double quote
     "&hellip;": "\u2026",  # Ellipsis
 }
+
 
 def replace_html_entities(html: str) -> str:
     """Replace HTML entities with their Unicode equivalents before parsing."""
@@ -194,11 +194,11 @@ def normalize_text_for_search(text: str) -> str:
     - Trim leading/trailing whitespace
     """
     # Collapse whitespace
-    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r"\s+", " ", text)
     # Normalize smart single quotes
-    text = text.replace('\u2018', "'").replace('\u2019', "'")
+    text = text.replace("\u2018", "'").replace("\u2019", "'")
     # Normalize smart double quotes
-    text = text.replace('\u201C', '"').replace('\u201D', '"')
+    text = text.replace("\u201c", '"').replace("\u201d", '"')
     return text.strip()
 
 
@@ -240,12 +240,12 @@ class CFITextParser(HTMLParser):
         self.text_child_counts: list[int] = [0]
 
         # Elements to skip entirely (their content is skipped)
-        self.skip_elements = {'script', 'style', 'head', 'meta', 'link'}
+        self.skip_elements = {"script", "style", "head", "meta", "link"}
         self.skip_depth = 0
 
         # Track nesting depth to know if we're at the root level
         # The root element (html) should not be added to the path
-        self.root_elements = {'html'}
+        self.root_elements = {"html"}
         self.at_root = True
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]):
@@ -275,7 +275,7 @@ class CFITextParser(HTMLParser):
         # Get element id if present
         element_id = None
         for name, value in attrs:
-            if name.lower() == 'id' and value:
+            if name.lower() == "id" and value:
                 element_id = value
                 break
 
@@ -354,24 +354,24 @@ class CFITextParser(HTMLParser):
             element_id = self.element_stack[-1][2]
 
         # Record this text node with both normalized and original text
-        self.text_nodes.append(TextNodeInfo(
-            text=normalized,
-            original_text=data,  # Keep original for offset mapping
-            doc_start=doc_start,
-            doc_end=doc_end,
-            element_path=list(self.element_path),
-            element_id=element_id,
-            text_node_index=text_node_index,
-        ))
+        self.text_nodes.append(
+            TextNodeInfo(
+                text=normalized,
+                original_text=data,  # Keep original for offset mapping
+                doc_start=doc_start,
+                doc_end=doc_end,
+                element_path=list(self.element_path),
+                element_id=element_id,
+                text_node_index=text_node_index,
+            )
+        )
 
     def get_accumulated_text(self) -> str:
         """Get the full accumulated text."""
         return self.accumulated_text
 
     def find_text_nodes_for_range(
-        self,
-        start_pos: int,
-        end_pos: int
+        self, start_pos: int, end_pos: int
     ) -> tuple[TextNodeInfo, int, TextNodeInfo, int] | None:
         """
         Find the text nodes and offsets for a character range.
@@ -410,9 +410,7 @@ class CFITextParser(HTMLParser):
         start_offset = _map_normalized_to_original_offset(
             start_node.text, start_node.original_text, start_offset_normalized
         )
-        end_offset = _map_normalized_to_original_offset(
-            end_node.text, end_node.original_text, end_offset_normalized
-        )
+        end_offset = _map_normalized_to_original_offset(end_node.text, end_node.original_text, end_offset_normalized)
 
         return (start_node, start_offset, end_node, end_offset)
 
@@ -499,8 +497,8 @@ def find_text_in_document(
             search_end_pos = search_start_pos + len(normalized_search)
     else:
         # Fuzzy match: compare with all whitespace removed
-        text_no_spaces = re.sub(r'\s+', '', accumulated_text).lower()
-        search_no_spaces = re.sub(r'\s+', '', normalized_search).lower()
+        text_no_spaces = re.sub(r"\s+", "", accumulated_text).lower()
+        search_no_spaces = re.sub(r"\s+", "", normalized_search).lower()
 
         # Map skip_chars to position in no-spaces text
         skip_no_spaces = 0
@@ -584,8 +582,7 @@ def build_cfi_from_search_result(
     min_len = min(len(start_path), len(end_path))
 
     for i in range(min_len):
-        if (start_path[i].type == end_path[i].type and
-                start_path[i].index == end_path[i].index):
+        if start_path[i].type == end_path[i].type and start_path[i].index == end_path[i].index:
             common_steps.append(start_path[i])
         else:
             break
@@ -594,20 +591,16 @@ def build_cfi_from_search_result(
     path = EPUBCFISegment(steps=common_steps)
 
     # Start segment: remaining steps from start path + text node
-    start_remaining = start_path[len(common_steps):]
-    start_steps = start_remaining + [
-        EPUBCFIStep(type="text", index=result.start_node.text_node_index)
-    ]
+    start_remaining = start_path[len(common_steps) :]
+    start_steps = start_remaining + [EPUBCFIStep(type="text", index=result.start_node.text_node_index)]
     start_segment = EPUBCFISegment(
         steps=start_steps,
         terminal_offset=result.start_offset,
     )
 
     # End segment: remaining steps from end path + text node
-    end_remaining = end_path[len(common_steps):]
-    end_steps = end_remaining + [
-        EPUBCFIStep(type="text", index=result.end_node.text_node_index)
-    ]
+    end_remaining = end_path[len(common_steps) :]
+    end_steps = end_remaining + [EPUBCFIStep(type="text", index=result.end_node.text_node_index)]
     end_segment = EPUBCFISegment(
         steps=end_steps,
         terminal_offset=result.end_offset,
@@ -642,53 +635,56 @@ def parse_epub_for_cfi(epub_path: str) -> tuple[Any, list[dict]]:
         Tuple of (zip_file, spine_items)
         where spine_items is a list of dicts with 'id', 'href', 'media_type'
     """
-    zf = zipfile.ZipFile(epub_path, 'r')
+    zf = zipfile.ZipFile(epub_path, "r")
 
     # Read container.xml to find OPF file
-    container_xml = zf.read('META-INF/container.xml').decode('utf-8')
+    container_xml = zf.read("META-INF/container.xml").decode("utf-8")
     container_root = ET.fromstring(container_xml)
 
     # Get the OPF path
-    ns = {'container': 'urn:oasis:names:tc:opendocument:xmlns:container'}
-    rootfile = container_root.find('.//container:rootfile', ns)
+    ns = {"container": "urn:oasis:names:tc:opendocument:xmlns:container"}
+    rootfile = container_root.find(".//container:rootfile", ns)
     if rootfile is None:
         # Try without namespace
-        rootfile = container_root.find('.//{*}rootfile')
+        rootfile = container_root.find(".//{*}rootfile")
 
     if rootfile is None:
         raise ValueError("Could not find rootfile in container.xml")
 
-    opf_path = rootfile.get('full-path')
-    opf_dir = opf_path.rsplit('/', 1)[0] + '/' if '/' in opf_path else ''
+    opf_path = rootfile.get("full-path")
+    if opf_path is None:
+        raise ValueError("Could not find OPF path in container.xml")
+    opf_dir = opf_path.rsplit("/", 1)[0] + "/" if "/" in opf_path else ""
 
     # Parse OPF file
-    opf_xml = zf.read(opf_path).decode('utf-8')
+    opf_xml = zf.read(opf_path).decode("utf-8")
     opf_root = ET.fromstring(opf_xml)
 
     # Build manifest map
     manifest = {}
-    ns_opf = {'opf': 'http://www.idpf.org/2007/opf'}
 
-    for item in opf_root.findall('.//{*}item'):
-        item_id = item.get('id')
-        href = item.get('href')
-        media_type = item.get('media-type')
+    for item in opf_root.findall(".//{*}item"):
+        item_id = item.get("id")
+        href = item.get("href")
+        media_type = item.get("media-type")
         if item_id and href:
             manifest[item_id] = {
-                'href': opf_dir + href,
-                'media_type': media_type,
+                "href": opf_dir + href,
+                "media_type": media_type,
             }
 
     # Build spine
     spine = []
-    for itemref in opf_root.findall('.//{*}itemref'):
-        idref = itemref.get('idref')
+    for itemref in opf_root.findall(".//{*}itemref"):
+        idref = itemref.get("idref")
         if idref and idref in manifest:
-            spine.append({
-                'id': idref,
-                'href': manifest[idref]['href'],
-                'media_type': manifest[idref]['media_type'],
-            })
+            spine.append(
+                {
+                    "id": idref,
+                    "href": manifest[idref]["href"],
+                    "media_type": manifest[idref]["media_type"],
+                }
+            )
 
     return zf, spine
 
@@ -715,17 +711,16 @@ def generate_cfi_python(
     try:
         zf, spine = parse_epub_for_cfi(epub_path)
     except Exception as e:
-        return {'error': f'Failed to parse EPUB: {e}'}
+        return {"error": f"Failed to parse EPUB: {e}"}
 
     try:
         # Track cumulative character count for pseudo-page calculation
-        cumulative_chars = 0
         spine_char_counts: list[int] = []
 
         # First pass: count characters in each spine item
         for spine_item in spine:
             try:
-                html_content = zf.read(spine_item['href']).decode('utf-8')
+                html_content = zf.read(spine_item["href"]).decode("utf-8")
                 html_content = replace_html_entities(html_content)
                 parser = CFITextParser()
                 parser.feed(html_content)
@@ -738,7 +733,7 @@ def generate_cfi_python(
         for spine_index, spine_item in enumerate(spine):
             try:
                 # Load HTML content
-                html_content = zf.read(spine_item['href']).decode('utf-8')
+                html_content = zf.read(spine_item["href"]).decode("utf-8")
                 html_content = replace_html_entities(html_content)
 
                 # Parse the document
@@ -752,8 +747,8 @@ def generate_cfi_python(
                 exact_match = normalized_search.lower() in accumulated_text.lower()
 
                 # Check for fuzzy match
-                text_no_spaces = re.sub(r'\s+', '', accumulated_text).lower()
-                search_no_spaces = re.sub(r'\s+', '', normalized_search).lower()
+                text_no_spaces = re.sub(r"\s+", "", accumulated_text).lower()
+                search_no_spaces = re.sub(r"\s+", "", normalized_search).lower()
                 fuzzy_match = not exact_match and search_no_spaces in text_no_spaces
 
                 if exact_match or fuzzy_match:
@@ -778,13 +773,13 @@ def generate_cfi_python(
                         pseudo_page = (char_position // CHARS_PER_PAGE) + 1  # 1-indexed
 
                         return {
-                            'cfi': cfi_string,
-                            'spineIndex': spine_index,
-                            'spineId': spine_item['id'],
-                            'href': spine_item['href'],
-                            'foundText': result.matched_text[:100],
-                            'pseudoPage': pseudo_page,
-                            'charPosition': char_position,
+                            "cfi": cfi_string,
+                            "spineIndex": spine_index,
+                            "spineId": spine_item["id"],
+                            "href": spine_item["href"],
+                            "foundText": result.matched_text[:100],
+                            "pseudoPage": pseudo_page,
+                            "charPosition": char_position,
                         }
 
             except Exception:
@@ -823,13 +818,15 @@ def _get_epub_spine(epub_path: str) -> list[dict]:
         if item and item.get_type() == ebooklib.ITEM_DOCUMENT:
             content = item.get_content()
             if isinstance(content, bytes):
-                content = content.decode('utf-8', errors='replace')
+                content = content.decode("utf-8", errors="replace")
 
-            spine_items.append({
-                'idref': item_id,
-                'href': item.get_name(),
-                'content': content,
-            })
+            spine_items.append(
+                {
+                    "idref": item_id,
+                    "href": item.get_name(),
+                    "content": content,
+                }
+            )
 
     return spine_items
 
@@ -852,13 +849,14 @@ def build_epub_annotation_position(cfi: str) -> str:
 # Public API
 # =============================================================================
 
+
 def verify_epub_attachment(file_path: str) -> bool:
     """
     Verify that a file is a valid EPUB.
     """
     try:
-        import ebooklib
         from ebooklib import epub
+
         book = epub.read_epub(file_path)
         return book is not None and len(list(book.spine)) > 0
     except Exception:
@@ -887,19 +885,19 @@ def find_text_in_epub(
     # Use pure Python CFI generation
     result = generate_cfi_python(epub_path, search_text)
 
-    if result and result.get('cfi'):
+    if result and result.get("cfi"):
         # Success - build the annotation position
-        cfi = result['cfi']
-        spine_index = result.get('spineIndex', 0)
-        char_position = result.get('charPosition', 0)
+        cfi = result["cfi"]
+        spine_index = result.get("spineIndex", 0)
+        char_position = result.get("charPosition", 0)
 
         return {
-            'cfi': cfi,
-            'annotation_position': build_epub_annotation_position(cfi),
-            'matched_text': result.get('foundText', search_text),
-            'chapter_found': spine_index + 1,  # Convert to 1-indexed
-            'char_position': char_position,  # Character offset for sortIndex
-            'score': 1.0,
+            "cfi": cfi,
+            "annotation_position": build_epub_annotation_position(cfi),
+            "matched_text": result.get("foundText", search_text),
+            "chapter_found": spine_index + 1,  # Convert to 1-indexed
+            "char_position": char_position,  # Character offset for sortIndex
+            "score": 1.0,
         }
 
     # Search failed - return error
@@ -910,13 +908,11 @@ def find_text_in_epub(
         total_chapters = 0
 
     error_msg = "Text not found in EPUB"
-    if result and result.get('error'):
-        error_msg = result['error']
+    if result and result.get("error"):
+        error_msg = result["error"]
 
     return {
-        'error': error_msg,
-        'total_chapters': total_chapters,
-        'search_text': search_text[:100],
+        "error": error_msg,
+        "total_chapters": total_chapters,
+        "search_text": search_text[:100],
     }
-
-

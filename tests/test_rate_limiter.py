@@ -39,4 +39,3 @@ def test_rate_limited_zotero_wraps_methods(monkeypatch):
     assert calls[0] == {"provider": "zotero"}
     assert calls[1] == {"limit": 1}
     assert wrapped.library_id == "123"
-

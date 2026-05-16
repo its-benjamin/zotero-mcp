@@ -20,18 +20,14 @@ def test_verify_archive_checksum(monkeypatch):
             expected,
         )
 
-        assert pdfannots_downloader._verify_archive_checksum(
-            archive_path, "https://example.com/asset.bin"
-        )
+        assert pdfannots_downloader._verify_archive_checksum(archive_path, "https://example.com/asset.bin")
 
         monkeypatch.setitem(
             pdfannots_downloader.EXPECTED_SHA256,
             "asset.bin",
             "0" * 64,
         )
-        assert not pdfannots_downloader._verify_archive_checksum(
-            archive_path, "https://example.com/asset.bin"
-        )
+        assert not pdfannots_downloader._verify_archive_checksum(archive_path, "https://example.com/asset.bin")
     finally:
         os.remove(archive_path)
 

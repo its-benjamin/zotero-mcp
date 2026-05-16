@@ -4,14 +4,12 @@ merge attachment dedup, linked-URL removal, and no-PDF messaging."""
 from unittest.mock import MagicMock, patch
 
 import pytest
+from conftest import DummyContext
 
-from conftest import DummyContext, FakeZotero
 from zotero_mcp.tools import _helpers
 from zotero_mcp.tools.annotations import (
     _batch_resolve_grandparent_titles,
-    _batch_resolve_parent_titles,
 )
-
 
 # -------------------------------------------------------------------------
 # Fix 1 — Pagination helper
@@ -86,7 +84,8 @@ class TestGrandparentResolution:
         zot.items.side_effect = items_side_effect
         return zot
 
-    def test_grandparent_resolution_paper_title(self):
+    @pytest.mark.asyncio
+    async def test_grandparent_resolution_paper_title(self):
         """Attachment parent -> paper grandparent returns paper title."""
         ATTACH_KEY = "ATT001"
         PAPER_KEY = "PAPER001"
@@ -111,11 +110,12 @@ class TestGrandparentResolution:
         zot = self._make_zot(items_lookup)
         ctx = DummyContext()
 
-        result = _batch_resolve_grandparent_titles(zot, {ATTACH_KEY}, ctx)
+        result = await _batch_resolve_grandparent_titles(zot, {ATTACH_KEY}, ctx)
 
         assert result[ATTACH_KEY] == "Real Paper Title"
 
-    def test_grandparent_resolution_orphaned_attachment(self):
+    @pytest.mark.asyncio
+    async def test_grandparent_resolution_orphaned_attachment(self):
         """Attachment with no parentItem falls back to its own title."""
         ATTACH_KEY = "ATT_ORPHAN"
 
@@ -132,11 +132,12 @@ class TestGrandparentResolution:
         zot = self._make_zot(items_lookup)
         ctx = DummyContext()
 
-        result = _batch_resolve_grandparent_titles(zot, {ATTACH_KEY}, ctx)
+        result = await _batch_resolve_grandparent_titles(zot, {ATTACH_KEY}, ctx)
 
         assert result[ATTACH_KEY] == "Snapshot"
 
-    def test_grandparent_resolution_non_attachment_parent(self):
+    @pytest.mark.asyncio
+    async def test_grandparent_resolution_non_attachment_parent(self):
         """Non-attachment parent (journalArticle) returns its own title."""
         PARENT_KEY = "JA001"
 
@@ -152,7 +153,7 @@ class TestGrandparentResolution:
         zot = self._make_zot(items_lookup)
         ctx = DummyContext()
 
-        result = _batch_resolve_grandparent_titles(zot, {PARENT_KEY}, ctx)
+        result = await _batch_resolve_grandparent_titles(zot, {PARENT_KEY}, ctx)
 
         # Not an attachment -> no two-hop -> falls back to own title
         assert result[PARENT_KEY] == "My Article Title"
@@ -191,14 +192,17 @@ class TestMergeAttachmentDedup:
 
         write_zot = MagicMock()
         write_zot.item.side_effect = lambda k: (
-            keeper if k == "KEEPER" else
-            dup_item if k == "DUP1" else
+            keeper
+            if k == "KEEPER"
+            else dup_item
+            if k == "DUP1"
             # For child re-fetch during execute, return the child itself
-            next((c for c in keeper_children + dup_children if c.get("key") == k), {"key": k, "version": 1, "data": {}})
+            else next(
+                (c for c in keeper_children + dup_children if c.get("key") == k), {"key": k, "version": 1, "data": {}}
+            )
         )
         write_zot.children.side_effect = lambda k: (
-            keeper_children if k == "KEEPER" else
-            dup_children if k == "DUP1" else []
+            keeper_children if k == "KEEPER" else dup_children if k == "DUP1" else []
         )
         write_zot.update_item.return_value = MagicMock(status_code=204, text="")
         write_zot.addto_collection.return_value = MagicMock(status_code=204, text="")
@@ -207,8 +211,9 @@ class TestMergeAttachmentDedup:
 
         return write_zot
 
+    @pytest.mark.asyncio
     @patch("zotero_mcp.tools.write._helpers._get_write_client")
-    def test_merge_skips_duplicate_pdf(self, mock_get_client, dummy_ctx):
+    async def test_merge_skips_duplicate_pdf(self, mock_get_client, dummy_ctx):
         """Identical attachment on keeper and duplicate is skipped."""
         keeper_att = {
             "key": "K_ATT",
@@ -240,19 +245,17 @@ class TestMergeAttachmentDedup:
 
         from zotero_mcp.tools.write import merge_duplicates
 
-        result = merge_duplicates("KEEPER", ["DUP1"], confirm=True, ctx=dummy_ctx)
+        result = await merge_duplicates("KEEPER", ["DUP1"], confirm=True, ctx=dummy_ctx)
 
         # The duplicate attachment should NOT have been re-parented
         # update_item should not be called for the dup attachment
-        reparent_calls = [
-            c for c in write_zot.update_item.call_args_list
-            if c[0][0].get("key") == "D_ATT"
-        ]
+        reparent_calls = [c for c in write_zot.update_item.call_args_list if c[0][0].get("key") == "D_ATT"]
         assert len(reparent_calls) == 0
         assert "D_ATT" not in result or "skipped" in result.lower() or "Merged" in result
 
     @patch("zotero_mcp.tools.write._helpers._get_write_client")
-    def test_merge_keeps_different_pdf(self, mock_get_client, dummy_ctx):
+    @pytest.mark.asyncio
+    async def test_merge_keeps_different_pdf(self, mock_get_client, dummy_ctx):
         """Different PDFs on keeper and duplicate are both kept."""
         keeper_att = {
             "key": "K_ATT",
@@ -284,17 +287,19 @@ class TestMergeAttachmentDedup:
 
         from zotero_mcp.tools.write import merge_duplicates
 
-        result = merge_duplicates("KEEPER", ["DUP1"], confirm=True, ctx=dummy_ctx)
+        await merge_duplicates("KEEPER", ["DUP1"], confirm=True, ctx=dummy_ctx)
 
         # The different attachment SHOULD have been re-parented
         reparent_calls = [
-            c for c in write_zot.update_item.call_args_list
+            c
+            for c in write_zot.update_item.call_args_list
             if isinstance(c[0][0], dict) and c[0][0].get("key") == "D_ATT"
         ]
         assert len(reparent_calls) == 1
 
+    @pytest.mark.asyncio
     @patch("zotero_mcp.tools.write._helpers._get_write_client")
-    def test_merge_dry_run_shows_skipped_count(self, mock_get_client, dummy_ctx):
+    async def test_merge_dry_run_shows_skipped_count(self, mock_get_client, dummy_ctx):
         """Dry run mentions skipped duplicate attachments."""
         keeper_att = {
             "key": "K_ATT",
@@ -326,7 +331,7 @@ class TestMergeAttachmentDedup:
 
         from zotero_mcp.tools.write import merge_duplicates
 
-        result = merge_duplicates("KEEPER", ["DUP1"], confirm=False, ctx=dummy_ctx)
+        result = await merge_duplicates("KEEPER", ["DUP1"], confirm=False, ctx=dummy_ctx)
 
         assert "duplicate attachment" in result.lower()
         assert "skipped" in result.lower() or "1" in result
@@ -354,13 +359,14 @@ class TestLinkedUrlRemoval:
         }
         return write_zot
 
+    @pytest.mark.asyncio
     @patch("zotero_mcp.tools._helpers._try_unpaywall")
     @patch("zotero_mcp.tools._helpers._try_arxiv_from_crossref")
     @patch("zotero_mcp.tools._helpers._try_semantic_scholar")
     @patch("zotero_mcp.tools._helpers._try_pmc")
     @patch("zotero_mcp.tools._helpers._download_and_attach_pdf")
     @patch("zotero_mcp.tools._helpers._attach_pdf_linked_url")
-    def test_auto_mode_reports_url_when_download_fails(
+    async def test_auto_mode_reports_url_when_download_fails(
         self, mock_linked, mock_download, mock_pmc, mock_ss, mock_arxiv, mock_unpaywall
     ):
         """In auto mode, if download fails but URL was found, report the URL."""
@@ -375,9 +381,8 @@ class TestLinkedUrlRemoval:
         write_zot = self._make_write_zot()
         ctx = DummyContext()
 
-        result = _helpers._try_attach_oa_pdf(
-            write_zot, "ITEM1", "10.1234/test", ctx,
-            crossref_metadata=None, attach_mode="auto"
+        result = await _helpers._try_attach_oa_pdf(
+            write_zot, "ITEM1", "10.1234/test", ctx, crossref_metadata=None, attach_mode="auto"
         )
 
         # linked_url should NOT be called in auto mode
@@ -386,14 +391,13 @@ class TestLinkedUrlRemoval:
         assert "URL was found" in result
         assert "example.com/paper.pdf" in result
 
+    @pytest.mark.asyncio
     @patch("zotero_mcp.tools._helpers._try_unpaywall")
     @patch("zotero_mcp.tools._helpers._try_arxiv_from_crossref")
     @patch("zotero_mcp.tools._helpers._try_semantic_scholar")
     @patch("zotero_mcp.tools._helpers._try_pmc")
     @patch("zotero_mcp.tools._helpers._attach_pdf_linked_url")
-    def test_linked_url_mode_still_works(
-        self, mock_linked, mock_pmc, mock_ss, mock_arxiv, mock_unpaywall
-    ):
+    async def test_linked_url_mode_still_works(self, mock_linked, mock_pmc, mock_ss, mock_arxiv, mock_unpaywall):
         """In linked_url mode, _attach_pdf_linked_url IS called."""
         mock_unpaywall.return_value = "https://example.com/paper.pdf"
         mock_arxiv.return_value = None
@@ -404,21 +408,19 @@ class TestLinkedUrlRemoval:
         write_zot = self._make_write_zot()
         ctx = DummyContext()
 
-        result = _helpers._try_attach_oa_pdf(
-            write_zot, "ITEM1", "10.1234/test", ctx,
-            crossref_metadata=None, attach_mode="linked_url"
+        result = await _helpers._try_attach_oa_pdf(
+            write_zot, "ITEM1", "10.1234/test", ctx, crossref_metadata=None, attach_mode="linked_url"
         )
 
         mock_linked.assert_called_once()
         assert "linked" in result.lower()
 
+    @pytest.mark.asyncio
     @patch("zotero_mcp.tools._helpers._try_unpaywall")
     @patch("zotero_mcp.tools._helpers._try_arxiv_from_crossref")
     @patch("zotero_mcp.tools._helpers._try_semantic_scholar")
     @patch("zotero_mcp.tools._helpers._try_pmc")
-    def test_no_pdf_message_is_clear(
-        self, mock_pmc, mock_ss, mock_arxiv, mock_unpaywall
-    ):
+    async def test_no_pdf_message_is_clear(self, mock_pmc, mock_ss, mock_arxiv, mock_unpaywall):
         """When no PDF is found, message clearly states no open-access PDF was found."""
         mock_unpaywall.return_value = None
         mock_arxiv.return_value = None
@@ -428,9 +430,8 @@ class TestLinkedUrlRemoval:
         write_zot = self._make_write_zot()
         ctx = DummyContext()
 
-        result = _helpers._try_attach_oa_pdf(
-            write_zot, "ITEM1", "10.1234/test", ctx,
-            crossref_metadata=None, attach_mode="auto"
+        result = await _helpers._try_attach_oa_pdf(
+            write_zot, "ITEM1", "10.1234/test", ctx, crossref_metadata=None, attach_mode="auto"
         )
 
         assert "no open-access PDF found" in result

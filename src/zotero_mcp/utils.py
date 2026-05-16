@@ -11,13 +11,14 @@ html_re = re.compile(r"<.*?>")
 @contextmanager
 def suppress_stdout():
     """Context manager to suppress stdout temporarily."""
-    with open(os.devnull, 'w') as devnull:
+    with open(os.devnull, "w") as devnull:
         old_stdout = sys.stdout
         sys.stdout = devnull
         try:
             yield
         finally:
             sys.stdout = old_stdout
+
 
 def format_creators(creators: list[dict[str, str] | str]) -> str:
     """
@@ -50,6 +51,7 @@ def is_local_mode() -> bool:
     """
     value = os.getenv("ZOTERO_LOCAL", "")
     return value.lower() in {"true", "yes", "1"}
+
 
 def format_item_result(
     item: dict,
@@ -127,7 +129,7 @@ def clean_html(raw_html: str, collapse_whitespace: bool = False) -> str:
         return ""
     clean_text = re.sub(html_re, "", raw_html)
     if collapse_whitespace:
-        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+        clean_text = re.sub(r"\s+", " ", clean_text).strip()
     return clean_text
 
 
@@ -137,12 +139,17 @@ def clean_html(raw_html: str, collapse_whitespace: bool = False) -> str:
 
 # German umlaut expansions (common in academic literature)
 _UMLAUT_MAP = {
-    'ü': 'ue', 'ö': 'oe', 'ä': 'ae', 'ß': 'ss',
-    'Ü': 'Ue', 'Ö': 'Oe', 'Ä': 'Ae',
+    "ü": "ue",
+    "ö": "oe",
+    "ä": "ae",
+    "ß": "ss",
+    "Ü": "Ue",
+    "Ö": "Oe",
+    "Ä": "Ae",
 }
 
 # Dash-like Unicode characters to normalize to ASCII hyphen-minus
-_DASH_PATTERN = re.compile(r'[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]')
+_DASH_PATTERN = re.compile(r"[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]")
 
 MAX_SEARCH_VARIANTS = 15
 
@@ -156,7 +163,7 @@ def _normalize_for_search(text: str) -> str:
     if not text:
         return text
     result = unidecode(text)
-    result = _DASH_PATTERN.sub('-', result)
+    result = _DASH_PATTERN.sub("-", result)
     return result
 
 
@@ -178,10 +185,10 @@ def _generate_search_variants(query: str) -> list[str]:
         variants.add(ascii_form)
 
     # Dashes to spaces (Cladder-Micus → Cladder Micus)
-    dash_to_space = query.replace('-', ' ')
+    dash_to_space = query.replace("-", " ")
     if dash_to_space != query:
         variants.add(dash_to_space)
-    dash_to_space_norm = ascii_form.replace('-', ' ')
+    dash_to_space_norm = ascii_form.replace("-", " ")
     if dash_to_space_norm not in variants:
         variants.add(dash_to_space_norm)
 
@@ -193,8 +200,8 @@ def _generate_search_variants(query: str) -> list[str]:
         variants.add(umlaut_expanded)
 
     # Spaces to dashes (Cladder Micus → Cladder-Micus)
-    if ' ' in query and '-' not in query:
-        space_to_dash = query.replace(' ', '-')
+    if " " in query and "-" not in query:
+        space_to_dash = query.replace(" ", "-")
         variants.add(space_to_dash)
 
     # Cap variants

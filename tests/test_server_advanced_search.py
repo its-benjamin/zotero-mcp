@@ -1,14 +1,16 @@
+import pytest
+
 from zotero_mcp import server
 
 
 class DummyContext:
-    def info(self, *_args, **_kwargs):
+    async def info(self, *_args, **_kwargs):
         return None
 
-    def error(self, *_args, **_kwargs):
+    async def error(self, *_args, **_kwargs):
         return None
 
-    def warning(self, *_args, **_kwargs):
+    async def warning(self, *_args, **_kwargs):
         return None
 
 
@@ -20,7 +22,8 @@ class FakeZotero:
         return self._items[start : start + limit]
 
 
-def test_advanced_search_filters_items(monkeypatch):
+@pytest.mark.asyncio
+async def test_advanced_search_filters_items(monkeypatch):
     fake_items = [
         {
             "key": "AAA11111",
@@ -55,7 +58,7 @@ def test_advanced_search_filters_items(monkeypatch):
     ]
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: FakeZotero(fake_items))
 
-    result = server.advanced_search(
+    result = await server.advanced_search(
         conditions=[
             {"field": "title", "operation": "contains", "value": "quantum"},
             {"field": "year", "operation": "isGreaterThan", "value": "2020"},
@@ -70,10 +73,11 @@ def test_advanced_search_filters_items(monkeypatch):
     assert "Ignored Attachment" not in result
 
 
-def test_advanced_search_rejects_unknown_operation(monkeypatch):
+@pytest.mark.asyncio
+async def test_advanced_search_rejects_unknown_operation(monkeypatch):
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: FakeZotero([]))
 
-    result = server.advanced_search(
+    result = await server.advanced_search(
         conditions=[{"field": "title", "operation": "regex", "value": ".*"}],
         ctx=DummyContext(),
     )
