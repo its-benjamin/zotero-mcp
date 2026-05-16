@@ -8,6 +8,7 @@ workflows could not determine whether users had populated place.
 
 import json
 
+import pytest
 from conftest import DummyContext
 
 from zotero_mcp.client import format_item_metadata, generate_bibtex
@@ -108,11 +109,16 @@ class TestPlaceInBibtex:
         assert "address" not in output
 
 
+async def _fake_fulltext(item_key, ctx):
+    return "# A Book\n\n## Full Text\n\nbody"
+
+
 class TestConnectorFetchMetadata:
     """The fetch wrapper is a thin builder over pyzotero item data; monkeypatch
     the Zotero client and the fulltext helper so the test stays unit-scoped."""
 
-    def test_place_in_fetch_metadata(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_place_in_fetch_metadata(self, monkeypatch):
         fake_data = {
             "itemType": "book",
             "title": "A Book",
@@ -134,10 +140,10 @@ class TestConnectorFetchMetadata:
         monkeypatch.setattr(
             _conn,
             "get_item_fulltext",
-            lambda item_key, ctx: "# A Book\n\n## Full Text\n\nbody",
+            _fake_fulltext,
         )
 
-        result = _conn.connector_fetch(id="ABCD1234", ctx=DummyContext())
+        result = await _conn.connector_fetch(id="ABCD1234", ctx=DummyContext())
         payload = json.loads(result)
 
         assert payload["metadata"]["place"] == "Oxford"

@@ -56,33 +56,37 @@ class TestResources:
         assert "zotero://tags" in uris
         assert "zotero://recent" in uris
 
-    def test_library_info_resource(self, fake_zot):
+    @pytest.mark.asyncio
+    async def test_library_info_resource(self, fake_zot):
         from zotero_mcp.resources import library_info
 
-        result = library_info()
+        result = await library_info()
         assert result["library_id"] == "99999"
         assert result["library_type"] == "user"
         assert result["local_mode"] is False
 
-    def test_collections_resource(self, fake_zot):
+    @pytest.mark.asyncio
+    async def test_collections_resource(self, fake_zot):
         from zotero_mcp.resources import collections_list
 
-        result = collections_list()
+        result = await collections_list()
         assert len(result) == 2
         assert result[0]["key"] == "COL1"
         assert result[0]["name"] == "Research"
         assert result[1]["parent"] == "COL1"
 
-    def test_tags_resource_dedupes(self, fake_zot):
+    @pytest.mark.asyncio
+    async def test_tags_resource_dedupes(self, fake_zot):
         from zotero_mcp.resources import tags_list
 
-        result = tags_list()
+        result = await tags_list()
         assert result == ["ml", "nlp"]
 
-    def test_recent_resource(self, fake_zot):
+    @pytest.mark.asyncio
+    async def test_recent_resource(self, fake_zot):
         from zotero_mcp.resources import recent_items
 
-        result = recent_items()
+        result = await recent_items()
         assert len(result) == 1
         assert result[0]["key"] == "AAAA1111"
         assert result[0]["title"] == "Recent Paper"

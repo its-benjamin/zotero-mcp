@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock
 
+import pytest
 from conftest import DummyContext
 
 from zotero_mcp import utils as _utils
@@ -174,7 +175,8 @@ class TestFallbackCascade:
         monkeypatch.setattr(search_module._client, "get_zotero_client", lambda: fake_zot)
         return fake_zot
 
-    def test_finds_on_first_try_no_fallback(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_finds_on_first_try_no_fallback(self, monkeypatch):
         items = [
             {
                 "key": "X1",
@@ -184,12 +186,13 @@ class TestFallbackCascade:
         self._setup(monkeypatch, {"Brewer 2011": items})
 
         ctx = DummyContext()
-        result = search_module.search_items(query="Brewer 2011", ctx=ctx)
+        result = await search_module.search_items(query="Brewer 2011", ctx=ctx)
 
         assert "Found" in result
         assert "Note:" not in result  # no fallback note
 
-    def test_finds_via_simplified_query(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_finds_via_simplified_query(self, monkeypatch):
         items = [
             {
                 "key": "X2",
@@ -207,12 +210,13 @@ class TestFallbackCascade:
         self._setup(monkeypatch, {"Brewer 2011": items})
 
         ctx = DummyContext()
-        result = search_module.search_items(query="Brewer 2011 DMN default mode network", ctx=ctx)
+        result = await search_module.search_items(query="Brewer 2011 DMN default mode network", ctx=ctx)
 
         assert "Simplified Find" in result
         assert "Note:" in result  # fallback note present
 
-    def test_finds_via_author_only(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_finds_via_author_only(self, monkeypatch):
         items = [
             {
                 "key": "X3",
@@ -228,22 +232,24 @@ class TestFallbackCascade:
         self._setup(monkeypatch, {"Brewer": items})
 
         ctx = DummyContext()
-        result = search_module.search_items(query="Brewer 2011", ctx=ctx)
+        result = await search_module.search_items(query="Brewer 2011", ctx=ctx)
 
         assert "Author Find" in result
         assert "Note:" in result
 
-    def test_returns_not_found_when_all_fail(self, monkeypatch, tmp_path):
+    @pytest.mark.asyncio
+    async def test_returns_not_found_when_all_fail(self, monkeypatch, tmp_path):
         self._setup(monkeypatch, {})  # Nothing found for any query
         # Point config path to a nonexistent location so semantic search is skipped
         monkeypatch.setattr(search_module, "Path", lambda *a: tmp_path / "nonexistent")
 
         ctx = DummyContext()
-        result = search_module.search_items(query="Nonexistent 9999", ctx=ctx)
+        result = await search_module.search_items(query="Nonexistent 9999", ctx=ctx)
 
         assert "No items found" in result
 
-    def test_fallback_note_includes_verification_guidance(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_fallback_note_includes_verification_guidance(self, monkeypatch):
         items = [
             {
                 "key": "X4",
@@ -257,7 +263,7 @@ class TestFallbackCascade:
         self._setup(monkeypatch, {"Brewer": items})
 
         ctx = DummyContext()
-        result = search_module.search_items(query="Brewer 2011", ctx=ctx)
+        result = await search_module.search_items(query="Brewer 2011", ctx=ctx)
 
         assert "verify" in result.lower()
         assert "title, authors, journal, and year" in result
@@ -271,7 +277,8 @@ class TestFallbackCascade:
 class TestAdvancedSearchNormalization:
     """Test that _compare in advanced_search normalizes both sides."""
 
-    def test_umlaut_matches_ascii(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_umlaut_matches_ascii(self, monkeypatch):
         """Müller should match Muller in advanced search conditions."""
         item = {
             "key": "Z1",
@@ -290,13 +297,14 @@ class TestAdvancedSearchNormalization:
         monkeypatch.setattr(search_module._client, "get_zotero_client", lambda: fake_zot)
 
         ctx = DummyContext()
-        result = search_module.advanced_search(
+        result = await search_module.advanced_search(
             conditions=[{"field": "creator", "operation": "contains", "value": "Muller"}], ctx=ctx
         )
 
         assert "Z1" in result or "Müller" in result or "Test Paper" in result
 
-    def test_dash_matches_en_dash(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_dash_matches_en_dash(self, monkeypatch):
         """Cladder-Micus (hyphen) should match Cladder–Micus (en-dash)."""
         item = {
             "key": "Z2",
@@ -315,7 +323,7 @@ class TestAdvancedSearchNormalization:
         monkeypatch.setattr(search_module._client, "get_zotero_client", lambda: fake_zot)
 
         ctx = DummyContext()
-        result = search_module.advanced_search(
+        result = await search_module.advanced_search(
             conditions=[{"field": "creator", "operation": "contains", "value": "Cladder-Micus"}], ctx=ctx
         )
 
@@ -330,7 +338,8 @@ class TestAdvancedSearchNormalization:
 class TestMultiWordSearch:
     """Test multi-word collection search in search_collections."""
 
-    def test_kcl_mindfulness_matches(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_kcl_mindfulness_matches(self, monkeypatch):
         from zotero_mcp.tools import write as write_module
 
         fake_zot = MagicMock()
@@ -343,12 +352,13 @@ class TestMultiWordSearch:
         monkeypatch.setattr(write_module._client, "get_zotero_client", lambda: fake_zot)
 
         ctx = DummyContext()
-        result = write_module.search_collections(query="KCL mindfulness", ctx=ctx)
+        result = await write_module.search_collections(query="KCL mindfulness", ctx=ctx)
 
         assert "KCL - Mindfulness" in result
         assert "Other Collection" not in result
 
-    def test_single_word_backward_compatible(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_single_word_backward_compatible(self, monkeypatch):
         from zotero_mcp.tools import write as write_module
 
         fake_zot = MagicMock()
@@ -361,7 +371,7 @@ class TestMultiWordSearch:
         monkeypatch.setattr(write_module._client, "get_zotero_client", lambda: fake_zot)
 
         ctx = DummyContext()
-        result = write_module.search_collections(query="Learning", ctx=ctx)
+        result = await write_module.search_collections(query="Learning", ctx=ctx)
 
         assert "Machine Learning" in result
         assert "Deep Learning" in result
@@ -392,7 +402,8 @@ class TestCascadeSimplification:
         monkeypatch.setattr(search_module, "_search_with_variants", fake_search_with_variants)
         monkeypatch.setattr(search_module._client, "get_zotero_client", lambda: fake_zot)
 
-    def test_strategy1_uses_author_and_year(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_strategy1_uses_author_and_year(self, monkeypatch):
         items = [
             {
                 "key": "L1",
@@ -407,12 +418,13 @@ class TestCascadeSimplification:
         ]
         self._setup(monkeypatch, {"Lynch 2003": items})
         ctx = DummyContext()
-        result = search_module.search_items(
+        result = await search_module.search_items(
             query="Lynch 2003 dialectical behavior therapy depressed older adults", ctx=ctx
         )
         assert "Lynch Paper" in result
 
-    def test_strategy1_no_year_uses_author_only(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_strategy1_no_year_uses_author_only(self, monkeypatch):
         items = [
             {
                 "key": "L2",
@@ -427,10 +439,11 @@ class TestCascadeSimplification:
         ]
         self._setup(monkeypatch, {"Lynch": items})
         ctx = DummyContext()
-        result = search_module.search_items(query="Lynch dialectical behavior therapy", ctx=ctx)
+        result = await search_module.search_items(query="Lynch dialectical behavior therapy", ctx=ctx)
         assert "Lynch No Year" in result
 
-    def test_strategy1_two_words_skipped(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_strategy1_two_words_skipped(self, monkeypatch):
         """With only 2 words, Strategy 1 (len > 2) is skipped."""
         items = [
             {
@@ -447,10 +460,11 @@ class TestCascadeSimplification:
         # Only Strategy 2 (author only) should fire for 2-word queries
         self._setup(monkeypatch, {"Lynch": items})
         ctx = DummyContext()
-        result = search_module.search_items(query="Lynch 2003", ctx=ctx)
+        result = await search_module.search_items(query="Lynch 2003", ctx=ctx)
         assert "Two Words" in result
 
-    def test_strategy1_year_first_reordered(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_strategy1_year_first_reordered(self, monkeypatch):
         """'2003 Lynch therapy' should produce 'Lynch 2003', not '2003 2003'."""
         items = [
             {
@@ -466,10 +480,11 @@ class TestCascadeSimplification:
         ]
         self._setup(monkeypatch, {"Lynch 2003": items})
         ctx = DummyContext()
-        result = search_module.search_items(query="2003 Lynch therapy", ctx=ctx)
+        result = await search_module.search_items(query="2003 Lynch therapy", ctx=ctx)
         assert "Year First" in result
 
-    def test_strategy1_multiple_years_picks_first(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_strategy1_multiple_years_picks_first(self, monkeypatch):
         items = [
             {
                 "key": "L5",
@@ -484,7 +499,7 @@ class TestCascadeSimplification:
         ]
         self._setup(monkeypatch, {"Lynch 2003": items})
         ctx = DummyContext()
-        result = search_module.search_items(query="Lynch 2003 2005 therapy", ctx=ctx)
+        result = await search_module.search_items(query="Lynch 2003 2005 therapy", ctx=ctx)
         assert "Multi Year" in result
 
 
@@ -509,7 +524,8 @@ class TestVerificationGuidance:
         monkeypatch.setattr(search_module, "_search_with_variants", fake_search_with_variants)
         monkeypatch.setattr(search_module._client, "get_zotero_client", lambda: fake_zot)
 
-    def test_fallback_note_includes_original_query(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_fallback_note_includes_original_query(self, monkeypatch):
         items = [
             {
                 "key": "V1",
@@ -524,10 +540,11 @@ class TestVerificationGuidance:
         ]
         self._setup(monkeypatch, {"Brewer": items})
         ctx = DummyContext()
-        result = search_module.search_items(query="Brewer 2011", ctx=ctx)
+        result = await search_module.search_items(query="Brewer 2011", ctx=ctx)
         assert "Brewer 2011" in result  # Original query in the note
 
-    def test_semantic_fallback_has_stronger_warning(self, monkeypatch, tmp_path):
+    @pytest.mark.asyncio
+    async def test_semantic_fallback_has_stronger_warning(self, monkeypatch, tmp_path):
         """When semantic search is the fallback, note should say 'may NOT be the exact paper'."""
         sem_items = [
             {
@@ -567,7 +584,7 @@ class TestVerificationGuidance:
         monkeypatch.setattr("zotero_mcp.semantic_search.create_semantic_search", fake_create)
 
         ctx = DummyContext()
-        result = search_module.search_items(query="Nonexistent Paper 2099", ctx=ctx)
+        result = await search_module.search_items(query="Nonexistent Paper 2099", ctx=ctx)
 
         assert "may NOT be" in result or "semantic" in result.lower()
 
@@ -580,7 +597,8 @@ class TestVerificationGuidance:
 class TestCascadeTimeout:
     """Test that cascade respects the timeout budget."""
 
-    def test_cascade_respects_timeout(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_cascade_respects_timeout(self, monkeypatch):
         """Setting CASCADE_TIMEOUT to 0 should skip all fallback strategies."""
         monkeypatch.setattr(search_module, "CASCADE_TIMEOUT", 0)
 
@@ -597,7 +615,7 @@ class TestCascadeTimeout:
         monkeypatch.setattr(search_module._client, "get_zotero_client", lambda: fake_zot)
 
         ctx = DummyContext()
-        result = search_module.search_items(query="Lynch 2003 dialectical behavior therapy", ctx=ctx)
+        result = await search_module.search_items(query="Lynch 2003 dialectical behavior therapy", ctx=ctx)
 
         # Should return "no items found" without trying all strategies
         assert "No items found" in result
