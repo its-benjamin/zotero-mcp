@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastmcp import FastMCP
@@ -61,11 +61,17 @@ async def server_lifespan(server: FastMCP):
         except Exception as e:
             sys.stderr.write(f"Warning: Could not check semantic search auto-update: {e}\n")
 
-    asyncio.create_task(_background_update())
+    update_task = asyncio.create_task(_background_update())
 
-    yield {}
+    try:
+        yield {}
+    finally:
+        if not update_task.done():
+            update_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await update_task
 
-    sys.stderr.write("Shutting down Zotero MCP server...\n")
+        sys.stderr.write("Shutting down Zotero MCP server...\n")
 
 
 # Create an MCP server (fastmcp 2.14+ no longer accepts `dependencies`)
