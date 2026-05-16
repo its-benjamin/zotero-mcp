@@ -58,7 +58,8 @@ def _pdf_attachment(key="ATTACH01", content_type="application/pdf"):
     }
 
 
-def test_create_area_annotation_happy_path(monkeypatch, fake_zot):
+@pytest.mark.asyncio
+async def test_create_area_annotation_happy_path(monkeypatch, fake_zot):
     fake_zot._items = [_pdf_attachment()]
 
     monkeypatch.setattr("zotero_mcp.client.get_web_zotero_client", lambda: fake_zot)
@@ -66,7 +67,7 @@ def test_create_area_annotation_happy_path(monkeypatch, fake_zot):
     monkeypatch.setattr("zotero_mcp.client.get_active_library", lambda: None)
     _patch_fitz(monkeypatch, [FakePage(width=600, height=800, label="7")])
 
-    result = server.create_area_annotation(
+    result = await server.create_area_annotation(
         attachment_key="ATTACH01",
         page=1,
         x=0.1,
@@ -107,8 +108,9 @@ def test_create_area_annotation_happy_path(monkeypatch, fake_zot):
         ),
     ],
 )
-def test_create_area_annotation_rejects_invalid_rectangles(kwargs, message):
-    result = server.create_area_annotation(
+@pytest.mark.asyncio
+async def test_create_area_annotation_rejects_invalid_rectangles(kwargs, message):
+    result = await server.create_area_annotation(
         attachment_key="ATTACH01",
         page=1,
         comment=None,
@@ -120,14 +122,15 @@ def test_create_area_annotation_rejects_invalid_rectangles(kwargs, message):
     assert message in result
 
 
-def test_create_area_annotation_rejects_non_pdf_attachment(monkeypatch, fake_zot):
+@pytest.mark.asyncio
+async def test_create_area_annotation_rejects_non_pdf_attachment(monkeypatch, fake_zot):
     fake_zot._items = [_pdf_attachment(content_type="text/html")]
 
     monkeypatch.setattr("zotero_mcp.client.get_web_zotero_client", lambda: fake_zot)
     monkeypatch.setattr("zotero_mcp.client.get_local_zotero_client", lambda: None)
     monkeypatch.setattr("zotero_mcp.client.get_active_library", lambda: None)
 
-    result = server.create_area_annotation(
+    result = await server.create_area_annotation(
         attachment_key="ATTACH01",
         page=1,
         x=0.1,
@@ -140,11 +143,12 @@ def test_create_area_annotation_rejects_non_pdf_attachment(monkeypatch, fake_zot
     assert "not a PDF attachment" in result
 
 
-def test_create_area_annotation_requires_web_api(monkeypatch):
+@pytest.mark.asyncio
+async def test_create_area_annotation_requires_web_api(monkeypatch):
     monkeypatch.setattr("zotero_mcp.client.get_web_zotero_client", lambda: None)
     monkeypatch.setattr("zotero_mcp.client.get_local_zotero_client", lambda: None)
 
-    result = server.create_area_annotation(
+    result = await server.create_area_annotation(
         attachment_key="ATTACH01",
         page=1,
         x=0.1,

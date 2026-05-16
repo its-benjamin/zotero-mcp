@@ -1,5 +1,6 @@
 """Retrieval tool functions — read-only access to Zotero items, collections, tags, libraries, and feeds."""
 
+import asyncio
 import logging as _logging
 import os
 import tempfile
@@ -45,7 +46,7 @@ from zotero_mcp.tools import _helpers
     ),
 )
 @with_zotero_api_lock
-def get_item_metadata(
+async def get_item_metadata(
     item_key: str, include_abstract: bool = True, format: Literal["markdown", "bibtex"] = "markdown", *, ctx: Context
 ) -> str:
     """
@@ -62,11 +63,11 @@ def get_item_metadata(
     """
     _ret_logger = _logging.getLogger("zotero_mcp.retrieval")
     try:
-        ctx.info(f"Fetching metadata for item {item_key} in {format} format")
+        await ctx.info(f"Fetching metadata for item {item_key} in {format} format")
         zot = _client.get_zotero_client()
 
         t0 = _time.monotonic()
-        item = zot.item(item_key)
+        item = await asyncio.to_thread(zot.item, item_key)
         _ret_logger.debug(f"[METADATA] zot.item({item_key}): {_time.monotonic() - t0:.2f}s")
         if not item:
             return f"No item found with key: {item_key}"
@@ -77,7 +78,7 @@ def get_item_metadata(
             return _client.format_item_metadata(item, include_abstract)
 
     except Exception as e:
-        ctx.error(f"Error fetching item metadata: {str(e)}")
+        await ctx.error(f"Error fetching item metadata: {str(e)}")
         return f"Error fetching item metadata: {str(e)}"
 
 
@@ -105,7 +106,7 @@ def get_item_metadata(
     ),
 )
 @with_zotero_api_lock
-def get_item_fulltext(item_key: str, *, ctx: Context) -> str:
+async def get_item_fulltext(item_key: str, *, ctx: Context) -> str:
     """
     Get the full text content of a Zotero item.
 
@@ -117,11 +118,11 @@ def get_item_fulltext(item_key: str, *, ctx: Context) -> str:
         Markdown-formatted item full text
     """
     try:
-        ctx.info(f"Fetching full text for item {item_key}")
-        zot = _client.get_zotero_client()
+        await ctx.info(f"Fetching full text for item {item_key}")
+        zot = await asyncio.to_thread(_client.get_zotero_client)
 
         # First get the item metadata
-        item = zot.item(item_key)
+        item = await asyncio.to_thread(zot.item, item_key)
         if not item:
             return f"No item found with key: {item_key}"
 
@@ -159,49 +160,49 @@ def get_item_fulltext(item_key: str, *, ctx: Context) -> str:
                         if extracted and extracted[0]:
                             # Skip timeout sentinel — don't show "__EXTRACTION_TIMEOUT__" as content
                             if isinstance(extracted, tuple) and len(extracted) >= 2 and extracted[1] == "timeout":
-                                ctx.info("PDF extraction timed out — skipping local fulltext")
+                                await ctx.info("PDF extraction timed out — skipping local fulltext")
                             else:
                                 source = extracted[1] if len(extracted) > 1 else "file"
-                                ctx.info(f"Retrieved full text from local storage ({source})")
+                                await ctx.info(f"Retrieved full text from local storage ({source})")
                                 return _helpers._prepend_size_warning(
                                     f"{metadata}\n\n---\n\n## Full Text\n\n{extracted[0]}",
                                     "Consider using zotero_semantic_search to find specific content instead of reading full papers.",
                                 )
         except Exception as local_extract_error:
             local_extract_error_msg = str(local_extract_error)
-            ctx.info(f"Local extraction fallback not available: {str(local_extract_error)}")
+            await ctx.info(f"Local extraction fallback not available: {str(local_extract_error)}")
 
         # Try to get attachment details
         attachment = _client.get_attachment_details(zot, item)
         if not attachment:
             return f"{metadata}\n\n---\n\nNo suitable attachment found for this item."
 
-        ctx.info(f"Found attachment: {attachment.key} ({attachment.content_type})")
+        await ctx.info(f"Found attachment: {attachment.key} ({attachment.content_type})")
 
         # Try fetching full text from Zotero's full text index first
         try:
-            full_text_data = zot.fulltext_item(attachment.key)
+            full_text_data = await asyncio.to_thread(zot.fulltext_item, attachment.key)
             if full_text_data and "content" in full_text_data and full_text_data["content"]:
-                ctx.info("Successfully retrieved full text from Zotero's index")
+                await ctx.info("Successfully retrieved full text from Zotero's index")
                 return _helpers._prepend_size_warning(
                     f"{metadata}\n\n---\n\n## Full Text\n\n{full_text_data['content']}",
                     "Consider using zotero_semantic_search to find specific content instead of reading full papers.",
                 )
         except Exception as fulltext_error:
-            ctx.info(f"Couldn't retrieve indexed full text: {str(fulltext_error)}")
+            await ctx.info(f"Couldn't retrieve indexed full text: {str(fulltext_error)}")
 
         # If we couldn't get indexed full text, try to download and convert the file
         try:
-            ctx.info(f"Attempting to download and convert attachment {attachment.key}")
+            await ctx.info(f"Attempting to download and convert attachment {attachment.key}")
 
             # Download the file to a temporary location
 
             with tempfile.TemporaryDirectory() as tmpdir:
                 file_path = os.path.join(tmpdir, attachment.filename or f"{attachment.key}.pdf")
-                zot.dump(attachment.key, filename=os.path.basename(file_path), path=tmpdir)
+                await asyncio.to_thread(zot.dump, attachment.key, filename=os.path.basename(file_path), path=tmpdir)
 
                 if os.path.exists(file_path):
-                    ctx.info(f"Downloaded file to {file_path}, converting to markdown")
+                    await ctx.info(f"Downloaded file to {file_path}, converting to markdown")
                     converted_text = _client.convert_to_markdown(file_path)
                     return _helpers._prepend_size_warning(
                         f"{metadata}\n\n---\n\n## Full Text\n\n{converted_text}",
@@ -210,7 +211,7 @@ def get_item_fulltext(item_key: str, *, ctx: Context) -> str:
                 else:
                     return f"{metadata}\n\n---\n\nFile download failed."
         except Exception as download_error:
-            ctx.error(f"Error downloading/converting file: {str(download_error)}")
+            await ctx.error(f"Error downloading/converting file: {str(download_error)}")
             if local_extract_error_msg:
                 return (
                     f"{metadata}\n\n---\n\nError accessing attachment: {str(download_error)}\n\n"
@@ -219,7 +220,7 @@ def get_item_fulltext(item_key: str, *, ctx: Context) -> str:
             return f"{metadata}\n\n---\n\nError accessing attachment: {str(download_error)}"
 
     except Exception as e:
-        ctx.error(f"Error fetching item full text: {str(e)}")
+        await ctx.error(f"Error fetching item full text: {str(e)}")
         return f"Error fetching item full text: {str(e)}"
 
 
@@ -232,7 +233,7 @@ def get_item_fulltext(item_key: str, *, ctx: Context) -> str:
         "which is page-limited."
     ),
 )
-def get_attachment_path(item_key: str, *, ctx: Context) -> str:
+async def get_attachment_path(item_key: str, *, ctx: Context) -> str:
     """List resolved local paths for an item's attachments."""
     if not _utils.is_local_mode():
         return (
@@ -262,13 +263,13 @@ def get_attachment_path(item_key: str, *, ctx: Context) -> str:
             lines.append("")
         return "\n".join(lines).rstrip()
     except Exception as e:
-        ctx.error(f"Error resolving attachment path: {e}")
+        await ctx.error(f"Error resolving attachment path: {e}")
         return f"Error resolving attachment path: {e}"
 
 
 @mcp.tool(name="zotero_get_collections", description="List all collections in your Zotero library.")
 @with_zotero_api_lock
-def get_collections(limit: int | str | None = None, *, ctx: Context) -> str:
+async def get_collections(limit: int | str | None = None, *, ctx: Context) -> str:
     """
     List all collections in your Zotero library.
 
@@ -280,8 +281,8 @@ def get_collections(limit: int | str | None = None, *, ctx: Context) -> str:
         Markdown-formatted list of collections
     """
     try:
-        ctx.info("Fetching collections")
-        zot = _client.get_zotero_client()
+        await ctx.info("Fetching collections")
+        zot = await asyncio.to_thread(_client.get_zotero_client)
 
         limit = _helpers._normalize_limit(limit, default=100, max_val=5000)
 
@@ -347,7 +348,7 @@ def get_collections(limit: int | str | None = None, *, ctx: Context) -> str:
         return "\n".join(output)
 
     except Exception as e:
-        ctx.error(f"Error fetching collections: {str(e)}")
+        await ctx.error(f"Error fetching collections: {str(e)}")
         error_msg = f"Error fetching collections: {str(e)}"
         return f"# Zotero Collections\n\n{error_msg}"
 
@@ -373,7 +374,7 @@ def _build_attachment_extra(info):
     description="Get all items in a specific Zotero collection. Supports detail='keys_only' (minimal), 'summary' (default, no abstracts), or 'full' (with abstracts). Includes PDF/notes indicators. TIP: To find papers on a specific topic, use zotero_semantic_search instead — it's faster and returns only relevant results.",
 )
 @with_zotero_api_lock
-def get_collection_items(
+async def get_collection_items(
     collection_key: str,
     detail: Literal["keys_only", "summary", "full"] = "summary",
     limit: int | str | None = 50,
@@ -392,7 +393,7 @@ def get_collection_items(
         Markdown-formatted list of items in the collection
     """
     try:
-        ctx.info(f"Fetching items for collection {collection_key}")
+        await ctx.info(f"Fetching items for collection {collection_key}")
         zot = _client.get_zotero_client()
 
         # First get the collection details. Fail fast on lookup error: the
@@ -401,10 +402,10 @@ def get_collection_items(
         # through to collection_items() when we can't confirm the collection
         # exists.
         try:
-            collection = zot.collection(collection_key)
+            collection = await asyncio.to_thread(zot.collection, collection_key)
             collection_name = collection["data"].get("name", "Unnamed Collection")
         except Exception as e:
-            ctx.error(f"Collection lookup failed for {collection_key}: {e}")
+            await ctx.error(f"Collection lookup failed for {collection_key}: {e}")
             return (
                 f"Collection not found or not yet accessible: `{collection_key}`. "
                 f"If you just created this collection, wait a moment and try again."
@@ -491,7 +492,7 @@ def get_collection_items(
         return result
 
     except Exception as e:
-        ctx.error(f"Error fetching collection items: {str(e)}")
+        await ctx.error(f"Error fetching collection items: {str(e)}")
         return f"Error fetching collection items: {str(e)}"
 
 
@@ -515,7 +516,7 @@ def get_collection_items(
     ),
 )
 @with_zotero_api_lock
-def get_item_children(item_key: str, *, ctx: Context) -> str:
+async def get_item_children(item_key: str, *, ctx: Context) -> str:
     """
     Get all child items (attachments, notes) for a specific Zotero item.
 
@@ -527,18 +528,18 @@ def get_item_children(item_key: str, *, ctx: Context) -> str:
         Markdown-formatted list of child items
     """
     try:
-        ctx.info(f"Fetching children for item {item_key}")
-        zot = _client.get_zotero_client()
+        await ctx.info(f"Fetching children for item {item_key}")
+        zot = await asyncio.to_thread(_client.get_zotero_client)
 
         # First get the parent item details
         try:
-            parent = zot.item(item_key)
+            parent = await asyncio.to_thread(zot.item, item_key)
             parent_title = parent["data"].get("title", "Untitled Item")
         except Exception:
             parent_title = f"Item {item_key}"
 
         # Then get the children
-        children = zot.children(item_key)
+        children = await asyncio.to_thread(zot.children, item_key)
         if not children:
             return f"No child items found for: {parent_title} (Key: {item_key})"
 
@@ -617,7 +618,7 @@ def get_item_children(item_key: str, *, ctx: Context) -> str:
         return "\n".join(output)
 
     except Exception as e:
-        ctx.error(f"Error fetching item children: {str(e)}")
+        await ctx.error(f"Error fetching item children: {str(e)}")
         return f"Error fetching item children: {str(e)}"
 
 
@@ -641,7 +642,7 @@ def get_item_children(item_key: str, *, ctx: Context) -> str:
     ),
 )
 @with_zotero_api_lock
-def get_items_children(item_keys: list[str] | str, *, ctx: Context) -> str:
+async def get_items_children(item_keys: list[str] | str, *, ctx: Context) -> str:
     """
     Get child items for multiple Zotero items in a single call.
 
@@ -650,7 +651,7 @@ def get_items_children(item_keys: list[str] | str, *, ctx: Context) -> str:
         ctx: MCP context
     """
     try:
-        zot = _client.get_zotero_client()
+        zot = await asyncio.to_thread(_client.get_zotero_client)
         keys = _helpers._normalize_str_list_input(item_keys, "item_keys")
 
         if not keys:
@@ -661,12 +662,12 @@ def get_items_children(item_keys: list[str] | str, *, ctx: Context) -> str:
         for batch_start in range(0, len(keys), 50):
             batch = keys[batch_start : batch_start + 50]
             try:
-                items = zot.items(itemKey=",".join(batch))
+                items = await asyncio.to_thread(zot.items, itemKey=",".join(batch))
                 for item in items:
                     k = item.get("key", "")
                     parent_titles[k] = item.get("data", {}).get("title", "Untitled")
             except Exception as e:
-                ctx.warning(f"Batch parent lookup failed: {e}")
+                await ctx.warning(f"Batch parent lookup failed: {e}")
                 for k in batch:
                     parent_titles.setdefault(k, f"(key: {k})")
 
@@ -677,7 +678,7 @@ def get_items_children(item_keys: list[str] | str, *, ctx: Context) -> str:
             output.append(f"## {title} (`{key}`)")
 
             try:
-                children = zot.children(key)
+                children = await asyncio.to_thread(zot.children, key)
             except Exception as e:
                 output.append(f"  Error fetching children: {e}")
                 output.append("")
@@ -718,13 +719,13 @@ def get_items_children(item_keys: list[str] | str, *, ctx: Context) -> str:
     except ValueError as e:
         return f"Input error: {e}"
     except Exception as e:
-        ctx.error(f"Error fetching items children: {str(e)}")
+        await ctx.error(f"Error fetching items children: {str(e)}")
         return f"Error fetching items children: {str(e)}"
 
 
 @mcp.tool(name="zotero_get_tags", description="Get all tags used in your Zotero library.")
 @with_zotero_api_lock
-def get_tags(limit: int | str | None = None, *, ctx: Context) -> str:
+async def get_tags(limit: int | str | None = None, *, ctx: Context) -> str:
     """
     Get all tags used in your Zotero library.
 
@@ -736,8 +737,8 @@ def get_tags(limit: int | str | None = None, *, ctx: Context) -> str:
         Markdown-formatted list of tags
     """
     try:
-        ctx.info("Fetching tags")
-        zot = _client.get_zotero_client()
+        await ctx.info("Fetching tags")
+        zot = await asyncio.to_thread(_client.get_zotero_client)
 
         limit = _helpers._normalize_limit(limit, default=500, max_val=5000)
 
@@ -776,7 +777,7 @@ def get_tags(limit: int | str | None = None, *, ctx: Context) -> str:
         return "\n".join(output)
 
     except Exception as e:
-        ctx.error(f"Error fetching tags: {str(e)}")
+        await ctx.error(f"Error fetching tags: {str(e)}")
         return f"Error fetching tags: {str(e)}"
 
 
@@ -805,7 +806,7 @@ def get_tags(limit: int | str | None = None, *, ctx: Context) -> str:
     ),
 )
 @with_zotero_api_lock
-def list_libraries(*, ctx: Context) -> str:
+async def list_libraries(*, ctx: Context) -> str:
     """
     List all accessible Zotero libraries.
 
@@ -816,7 +817,7 @@ def list_libraries(*, ctx: Context) -> str:
         Markdown-formatted list of libraries with item counts.
     """
     try:
-        ctx.info("Listing accessible libraries")
+        await ctx.info("Listing accessible libraries")
         local = os.getenv("ZOTERO_LOCAL", "").lower() in ["true", "yes", "1"]
         override = _client.get_active_library()
 
@@ -866,13 +867,13 @@ def list_libraries(*, ctx: Context) -> str:
                 reader.close()
         else:
             # Web mode: query groups via pyzotero
-            zot = _client.get_zotero_client()
+            zot = await asyncio.to_thread(_client.get_zotero_client)
             output.append("## User Library")
             output.append(f"- **My Library** (libraryID={os.getenv('ZOTERO_LIBRARY_ID', '?')})")
             output.append("")
 
             try:
-                groups = zot.groups()
+                groups = await asyncio.to_thread(zot.groups)
                 if groups:
                     output.append("## Group Libraries")
                     for group in groups:
@@ -890,7 +891,7 @@ def list_libraries(*, ctx: Context) -> str:
         return "\n".join(output)
 
     except Exception as e:
-        ctx.error(f"Error listing libraries: {str(e)}")
+        await ctx.error(f"Error listing libraries: {str(e)}")
         return f"Error listing libraries: {str(e)}"
 
 
@@ -919,7 +920,7 @@ def list_libraries(*, ctx: Context) -> str:
     ),
 )
 @with_zotero_api_lock
-def switch_library(
+async def switch_library(
     library_id: str,
     library_type: str = "group",
     *,
@@ -942,7 +943,7 @@ def switch_library(
         # TODO(human): Implement validate_library_switch() below
         if library_type == "default":
             _client.clear_active_library()
-            ctx.info("Reset to default library configuration")
+            await ctx.info("Reset to default library configuration")
             return (
                 "Switched back to default library configuration "
                 f"(ZOTERO_LIBRARY_ID={os.getenv('ZOTERO_LIBRARY_ID', '0')}, "
@@ -954,13 +955,17 @@ def switch_library(
             return error
 
         _client.set_active_library(library_id, library_type)
-        ctx.info(f"Switched to library {library_id} (type={library_type})")
+        await ctx.info(f"Switched to library {library_id} (type={library_type})")
 
         # Verify the switch works by making a test call
         try:
             zot = _client.get_zotero_client()
-            zot.add_parameters(limit=1)
-            zot.items()
+
+            def _validate_lib():
+                zot.add_parameters(limit=1)
+                zot.items()
+
+            await asyncio.to_thread(_validate_lib)
             return (
                 f"Successfully switched to library **{library_id}** "
                 f"(type={library_type}). All tools now operate on this library."
@@ -973,7 +978,7 @@ def switch_library(
             )
 
     except Exception as e:
-        ctx.error(f"Error switching library: {str(e)}")
+        await ctx.error(f"Error switching library: {str(e)}")
         return f"Error switching library: {str(e)}"
 
 
@@ -1033,7 +1038,7 @@ def validate_library_switch(library_id: str, library_type: str) -> str | None:
     ),
 )
 @with_zotero_api_lock
-def list_feeds(*, ctx: Context) -> str:
+async def list_feeds(*, ctx: Context) -> str:
     """
     List all RSS feed subscriptions from the local Zotero database.
 
@@ -1045,7 +1050,7 @@ def list_feeds(*, ctx: Context) -> str:
         if not local:
             return "RSS feeds are only accessible in local mode (ZOTERO_LOCAL=true)."
 
-        ctx.info("Listing RSS feeds")
+        await ctx.info("Listing RSS feeds")
         from zotero_mcp.local_db import LocalZoteroReader
 
         reader = LocalZoteroReader()
@@ -1071,7 +1076,7 @@ def list_feeds(*, ctx: Context) -> str:
             reader.close()
 
     except Exception as e:
-        ctx.error(f"Error listing feeds: {str(e)}")
+        await ctx.error(f"Error listing feeds: {str(e)}")
         return f"Error listing feeds: {str(e)}"
 
 
@@ -1094,7 +1099,7 @@ def list_feeds(*, ctx: Context) -> str:
     ),
 )
 @with_zotero_api_lock
-def get_feed_items(
+async def get_feed_items(
     library_id: int,
     limit: int = 20,
     *,
@@ -1116,7 +1121,7 @@ def get_feed_items(
         if not local:
             return "RSS feed items are only accessible in local mode (ZOTERO_LOCAL=true)."
 
-        ctx.info(f"Fetching items from feed (libraryID={library_id})")
+        await ctx.info(f"Fetching items from feed (libraryID={library_id})")
         from zotero_mcp.local_db import LocalZoteroReader
 
         reader = LocalZoteroReader()
@@ -1156,7 +1161,7 @@ def get_feed_items(
             reader.close()
 
     except Exception as e:
-        ctx.error(f"Error fetching feed items: {str(e)}")
+        await ctx.error(f"Error fetching feed items: {str(e)}")
         return f"Error fetching feed items: {str(e)}"
 
 
@@ -1182,7 +1187,7 @@ def get_feed_items(
     ),
 )
 @with_zotero_api_lock
-def get_recent(limit: int | str = 10, collection_key: str | None = None, *, ctx: Context) -> str:
+async def get_recent(limit: int | str = 10, collection_key: str | None = None, *, ctx: Context) -> str:
     """
     Get recently added items to your Zotero library.
 
@@ -1195,22 +1200,24 @@ def get_recent(limit: int | str = 10, collection_key: str | None = None, *, ctx:
         Markdown-formatted list of recent items
     """
     try:
-        ctx.info(f"Fetching {limit} recent items")
-        zot = _client.get_zotero_client()
+        await ctx.info(f"Fetching {limit} recent items")
+        zot = await asyncio.to_thread(_client.get_zotero_client)
 
         limit = _helpers._normalize_limit(limit, default=10)
 
         # Get recent items, optionally scoped to a collection
         if collection_key:
             try:
-                _col = zot.collection(collection_key)
+                _col = await asyncio.to_thread(zot.collection, collection_key)
             except Exception:
                 _col = None
             if not _col or _col.get("key") != collection_key:
                 return f"Collection not found: '{collection_key}'. Use zotero_get_collections or zotero_search_collections to find valid collection keys."
-            items = zot.collection_items(collection_key, sort="dateAdded", direction="desc", limit=limit)
+            items = await asyncio.to_thread(
+                zot.collection_items, collection_key, sort="dateAdded", direction="desc", limit=limit
+            )
         else:
-            items = zot.items(limit=limit, sort="dateAdded", direction="desc")
+            items = await asyncio.to_thread(zot.items, limit=limit, sort="dateAdded", direction="desc")
 
         if not items:
             return (
@@ -1238,5 +1245,5 @@ def get_recent(limit: int | str = 10, collection_key: str | None = None, *, ctx:
         return "\n".join(output)
 
     except Exception as e:
-        ctx.error(f"Error fetching recent items: {str(e)}")
+        await ctx.error(f"Error fetching recent items: {str(e)}")
         return f"Error fetching recent items: {str(e)}"

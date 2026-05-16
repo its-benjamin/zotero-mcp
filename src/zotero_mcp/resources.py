@@ -4,6 +4,8 @@ Resources expose read-only data that models can browse without tool calls,
 reducing token usage for common lookups.
 """
 
+import asyncio
+
 from fastmcp.exceptions import ResourceError
 
 from zotero_mcp import client as _client
@@ -14,10 +16,10 @@ from zotero_mcp.client import with_zotero_api_lock
 
 @mcp.resource("zotero://library/info")
 @with_zotero_api_lock
-def library_info() -> dict:
+async def library_info() -> dict:
     """Basic library information and item count."""
     try:
-        zot = _client.get_zotero_client()
+        zot = await asyncio.to_thread(_client.get_zotero_client)
         override = _client.get_active_library()
         return {
             "library_type": override.get("library_type") or zot.library_type,
@@ -30,11 +32,11 @@ def library_info() -> dict:
 
 @mcp.resource("zotero://collections")
 @with_zotero_api_lock
-def collections_list() -> list[dict]:
+async def collections_list() -> list[dict]:
     """All collections in the library with keys and names."""
     try:
-        zot = _client.get_zotero_client()
-        collections = zot.collections()
+        zot = await asyncio.to_thread(_client.get_zotero_client)
+        collections = await asyncio.to_thread(zot.collections)
         return [
             {
                 "key": c["key"],
@@ -49,11 +51,11 @@ def collections_list() -> list[dict]:
 
 @mcp.resource("zotero://tags")
 @with_zotero_api_lock
-def tags_list() -> list[str]:
+async def tags_list() -> list[str]:
     """All tags used in the library."""
     try:
-        zot = _client.get_zotero_client()
-        tags = zot.everything(zot.tags())
+        zot = await asyncio.to_thread(_client.get_zotero_client)
+        tags = await asyncio.to_thread(lambda: zot.everything(zot.tags()))
         return sorted({t["tag"] for t in tags})
     except Exception as e:
         raise ResourceError(f"Could not fetch tags: {e}") from e
@@ -61,12 +63,16 @@ def tags_list() -> list[str]:
 
 @mcp.resource("zotero://recent")
 @with_zotero_api_lock
-def recent_items() -> list[dict]:
+async def recent_items() -> list[dict]:
     """10 most recently added items (key, title, type, date)."""
     try:
-        zot = _client.get_zotero_client()
-        zot.add_parameters(limit=10, sort="dateAdded", direction="desc", itemType="-attachment")
-        items = zot.items()
+        zot = await asyncio.to_thread(_client.get_zotero_client)
+
+        def _fetch_items():
+            zot.add_parameters(limit=10, sort="dateAdded", direction="desc", itemType="-attachment")
+            return zot.items()
+
+        items = await asyncio.to_thread(_fetch_items)
         return [
             {
                 "key": item["key"],

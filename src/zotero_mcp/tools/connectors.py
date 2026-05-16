@@ -1,5 +1,6 @@
 """ChatGPT connector tool functions (search & fetch)."""
 
+import asyncio
 import json
 import os
 import uuid
@@ -21,7 +22,7 @@ from zotero_mcp.tools.retrieval import get_item_fulltext
     name="search", description="ChatGPT-compatible search wrapper. Performs semantic search and returns JSON results."
 )
 @with_zotero_api_lock
-def chatgpt_connector_search(query: str, *, ctx: Context) -> str:
+async def chatgpt_connector_search(query: str, *, ctx: Context) -> str:
     """
     Returns a JSON-encoded string with shape {"results": [{"id","title","url"}, ...]}.
     The MCP runtime wraps this string as a single text content item.
@@ -55,7 +56,7 @@ def chatgpt_connector_search(query: str, *, ctx: Context) -> str:
 
         return json.dumps({"results": result_list}, separators=(",", ":"))
     except Exception as e:
-        ctx.error(f"Error in search wrapper: {str(e)}")
+        await ctx.error(f"Error in search wrapper: {str(e)}")
         return json.dumps({"results": []}, separators=(",", ":"))
 
 
@@ -63,7 +64,7 @@ def chatgpt_connector_search(query: str, *, ctx: Context) -> str:
     name="fetch", description="ChatGPT-compatible fetch wrapper. Retrieves fulltext/metadata for a Zotero item by ID."
 )
 @with_zotero_api_lock
-def connector_fetch(id: str, *, ctx: Context) -> str:
+async def connector_fetch(id: str, *, ctx: Context) -> str:
     """
     Returns a JSON-encoded string with shape {"id","title","text","url","metadata":{...}}.
     The MCP runtime wraps this string as a single text content item.
@@ -77,9 +78,9 @@ def connector_fetch(id: str, *, ctx: Context) -> str:
             )
 
         # Fetch item metadata for title and context
-        zot = _client.get_zotero_client()
+        zot = await asyncio.to_thread(_client.get_zotero_client)
         try:
-            item = zot.item(item_key)
+            item = await asyncio.to_thread(zot.item, item_key)
             data = item.get("data", {}) if item else {}
         except Exception:
             item = None
@@ -100,7 +101,7 @@ def connector_fetch(id: str, *, ctx: Context) -> str:
         url = web_url or zotero_url
 
         # Use existing tool to get best-effort fulltext/markdown
-        text_md = get_item_fulltext(item_key=item_key, ctx=ctx)
+        text_md = await get_item_fulltext(item_key=item_key, ctx=ctx)
         # Extract the actual full text section if present, else keep as-is
         text_clean = text_md
         try:
@@ -141,7 +142,7 @@ def connector_fetch(id: str, *, ctx: Context) -> str:
             separators=(",", ":"),
         )
     except Exception as e:
-        ctx.error(f"Error in fetch wrapper: {str(e)}")
+        await ctx.error(f"Error in fetch wrapper: {str(e)}")
         return json.dumps(
             {"id": id, "title": "", "text": "", "url": "", "metadata": {"error": str(e)}}, separators=(",", ":")
         )

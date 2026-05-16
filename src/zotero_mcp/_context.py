@@ -1,15 +1,23 @@
-"""Provides fastmcp.Context, falling back to a lightweight stub when fastmcp is not installed."""
+"""Provides fastmcp.Context, falling back to a lightweight async stub when fastmcp is not installed."""
 
-try:
-    from fastmcp import Context
-except ImportError:
+import logging
+from typing import TYPE_CHECKING
 
-    class Context:  # type: ignore[no-redef]
-        def info(self, message: str) -> None:
-            pass
+_logger = logging.getLogger(__name__)
 
-        def warning(self, message: str) -> None:
-            pass
+if TYPE_CHECKING:
+    from fastmcp import Context as Context  # noqa: F401
+else:
+    try:
+        from fastmcp import Context  # type: ignore[assignment]
+    except ImportError:
 
-        def error(self, message: str) -> None:
-            pass
+        class Context:  # type: ignore[no-redef]
+            async def info(self, message: str) -> None:
+                pass
+
+            async def warning(self, message: str) -> None:
+                pass
+
+            async def error(self, message: str) -> None:
+                pass

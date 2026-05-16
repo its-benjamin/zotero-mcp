@@ -1,5 +1,6 @@
 """Write / mutation tool functions for the Zotero MCP server."""
 
+import asyncio
 import json
 import os
 import posixpath
@@ -7,7 +8,7 @@ import re
 import tempfile
 import time as _time
 import xml.etree.ElementTree as ET
-from typing import Literal
+from typing import Any, Literal, cast
 
 import requests
 
@@ -28,7 +29,7 @@ CROSSREF_TYPE_MAP = _helpers.CROSSREF_TYPE_MAP
     description="Batch update tags across multiple items matching a search query or tag filter.",
 )
 @with_zotero_api_lock
-def batch_update_tags(
+async def batch_update_tags(
     query: str = "",
     add_tags: list[str] | str | None = None,
     remove_tags: list[str] | str | None = None,
@@ -68,7 +69,7 @@ def batch_update_tags(
         if not add_tags and not remove_tags:
             return "Error: After parsing, no valid tags were provided to add or remove"
 
-        ctx.info(f"Batch updating tags for items matching '{query}'")
+        await ctx.info(f"Batch updating tags for items matching '{query}'")
         zot = _client.get_zotero_client()
 
         # Use shared hybrid-mode helper for correct library override propagation
@@ -101,13 +102,17 @@ def batch_update_tags(
                 tag = None
 
         # Search for items matching the query and/or tag filter
-        params = {"limit": limit}
+        params: dict[str, Any] = {"limit": limit}
         if query:
             params["q"] = query
         if tag:
             params["tag"] = tag
-        zot.add_parameters(**params)
-        items = zot.items()
+
+        def _fetch_items():
+            zot.add_parameters(**params)
+            return zot.items()
+
+        items = await asyncio.to_thread(_fetch_items)
 
         if not items:
             filter_desc = []
@@ -170,24 +175,24 @@ def batch_update_tags(
                         try:
                             web_item = write_zot.item(item_key)
                             web_item["data"]["tags"] = current_tags
-                            ctx.info(f"Updating item {item_key} via web API with tags: {current_tags}")
+                            await ctx.info(f"Updating item {item_key} via web API with tags: {current_tags}")
                             result = write_zot.update_item(web_item)
                         except Exception as e:
-                            ctx.error(f"Failed to fetch/update item {item_key} via web API: {str(e)}")
+                            await ctx.error(f"Failed to fetch/update item {item_key} via web API: {str(e)}")
                             skipped_count += 1
                             continue
                     else:
                         item["data"]["tags"] = current_tags
-                        ctx.info(f"Updating item {item_key} with tags: {current_tags}")
+                        await ctx.info(f"Updating item {item_key} with tags: {current_tags}")
                         result = write_zot.update_item(item)
 
-                    if _helpers._handle_write_response(result, ctx):
+                    if await _helpers._handle_write_response(result, ctx):
                         updated_count += 1
                     else:
-                        ctx.error(f"Update may have failed for item {item_key}: {result}")
+                        await ctx.error(f"Update may have failed for item {item_key}: {result}")
                         skipped_count += 1
                 except Exception as e:
-                    ctx.error(f"Failed to update item {item.get('key', 'unknown')}: {str(e)}")
+                    await ctx.error(f"Failed to update item {item.get('key', 'unknown')}: {str(e)}")
                     # Continue with other items instead of failing completely
                     skipped_count += 1
             else:
@@ -213,7 +218,7 @@ def batch_update_tags(
         return "\n".join(response)
 
     except Exception as e:
-        ctx.error(f"Error in batch tag update: {str(e)}")
+        await ctx.error(f"Error in batch tag update: {str(e)}")
         return f"Error in batch tag update: {str(e)}"
 
 
@@ -227,20 +232,20 @@ def batch_update_tags(
     ),
 )
 @with_zotero_api_lock
-def create_collection(name: str, parent_collection: str | None = None, *, ctx: Context) -> str:
+async def create_collection(name: str, parent_collection: str | None = None, *, ctx: Context) -> str:
     try:
         read_zot, write_zot = _helpers._get_write_client(ctx)
     except ValueError as e:
         return str(e)
 
     try:
-        ctx.info(f"Creating collection '{name}'")
+        await ctx.info(f"Creating collection '{name}'")
 
         # Resolve parent_collection name if it doesn't look like a key
         parent_key = parent_collection
         if parent_collection and not re.match(r"^[A-Z0-9]{8}$", parent_collection):
             try:
-                keys = _helpers._resolve_collection_names(read_zot, [parent_collection], ctx=ctx)
+                keys = await _helpers._resolve_collection_names(read_zot, [parent_collection], ctx=ctx)
                 parent_key = keys[0] if keys else None
             except ValueError as e:
                 return f"Error resolving parent collection: {e}"
@@ -249,7 +254,7 @@ def create_collection(name: str, parent_collection: str | None = None, *, ctx: C
         if parent_key:
             coll_data["parentCollection"] = parent_key
         else:
-            coll_data["parentCollection"] = False
+            coll_data["parentCollection"] = False  # type: ignore[assignment]
 
         result = write_zot.create_collections([coll_data])
 
@@ -260,16 +265,16 @@ def create_collection(name: str, parent_collection: str | None = None, *, ctx: C
         return f"Failed to create collection: {result}"
 
     except Exception as e:
-        ctx.error(f"Error creating collection: {e}")
+        await ctx.error(f"Error creating collection: {e}")
         return f"Error creating collection: {e}"
 
 
 @mcp.tool(name="zotero_search_collections", description="Search for collections by name to find their keys.")
 @with_zotero_api_lock
-def search_collections(query: str, *, ctx: Context) -> str:
+async def search_collections(query: str, *, ctx: Context) -> str:
     try:
-        zot = _client.get_zotero_client()
-        ctx.info(f"Searching collections for '{query}'")
+        zot = await asyncio.to_thread(_client.get_zotero_client)
+        await ctx.info(f"Searching collections for '{query}'")
 
         collections = _helpers._paginate(zot.collections)
         if not collections:
@@ -290,7 +295,7 @@ def search_collections(query: str, *, ctx: Context) -> str:
             lines.append(f"**Key:** `{key}`")
             if parent_key:
                 try:
-                    parent = zot.collection(parent_key)
+                    parent = await asyncio.to_thread(zot.collection, parent_key)
                     lines.append(f"**Parent:** {parent['data'].get('name', parent_key)}")
                 except Exception:
                     lines.append(f"**Parent key:** {parent_key}")
@@ -299,7 +304,7 @@ def search_collections(query: str, *, ctx: Context) -> str:
         return "\n".join(lines)
 
     except Exception as e:
-        ctx.error(f"Error searching collections: {e}")
+        await ctx.error(f"Error searching collections: {e}")
         return f"Error searching collections: {e}"
 
 
@@ -313,7 +318,7 @@ def search_collections(query: str, *, ctx: Context) -> str:
     ),
 )
 @with_zotero_api_lock
-def manage_collections(
+async def manage_collections(
     item_keys: list[str] | str,
     add_to: list[str] | str | None = None,
     remove_from: list[str] | str | None = None,
@@ -349,7 +354,7 @@ def manage_collections(
             for item_key in keys:
                 item_dict = _get_item(item_key)
                 resp = write_zot.addto_collection(coll_key, item_dict)
-                if _helpers._handle_write_response(resp, ctx):
+                if await _helpers._handle_write_response(resp, ctx):
                     results.append(f"Added {item_key} to {coll_key}")
                     # Invalidate cache — version changed after addto_collection
                     item_cache.pop(item_key, None)
@@ -360,7 +365,7 @@ def manage_collections(
             for item_key in keys:
                 item_dict = _get_item(item_key)
                 resp = write_zot.deletefrom_collection(coll_key, item_dict)
-                if _helpers._handle_write_response(resp, ctx):
+                if await _helpers._handle_write_response(resp, ctx):
                     results.append(f"Removed {item_key} from {coll_key}")
                     item_cache.pop(item_key, None)
                 else:
@@ -371,7 +376,7 @@ def manage_collections(
     except ValueError as e:
         return f"Input error: {e}"
     except Exception as e:
-        ctx.error(f"Error managing collections: {e}")
+        await ctx.error(f"Error managing collections: {e}")
         return f"Error managing collections: {e}"
 
 
@@ -404,7 +409,7 @@ def manage_collections(
     ),
 )
 @with_zotero_api_lock
-def add_by_doi(
+async def add_by_doi(
     doi: str,
     collections: list[str] | str | None = None,
     tags: list[str] | str | None = None,
@@ -422,7 +427,7 @@ def add_by_doi(
         if not normalized:
             return f"Error: '{doi}' does not appear to be a valid DOI."
 
-        ctx.info(f"Fetching metadata for DOI: {normalized}")
+        await ctx.info(f"Fetching metadata for DOI: {normalized}")
 
         resp = rate_limited_get(
             "crossref",
@@ -537,7 +542,7 @@ def add_by_doi(
             title = item_data.get("title", normalized)
 
             # Attempt open-access PDF attachment (pass CrossRef metadata for arXiv fallback)
-            pdf_status = _helpers._try_attach_oa_pdf(
+            pdf_status = await _helpers._try_attach_oa_pdf(
                 write_zot, item_key, normalized, ctx, crossref_metadata=cr, attach_mode=attach_mode
             )
 
@@ -557,7 +562,7 @@ def add_by_doi(
     except requests.RequestException as e:
         return f"Error fetching from CrossRef: {e}"
     except Exception as e:
-        ctx.error(f"Error adding by DOI: {e}")
+        await ctx.error(f"Error adding by DOI: {e}")
         return f"Error adding by DOI: {e}"
 
 
@@ -590,7 +595,7 @@ def add_by_doi(
     ),
 )
 @with_zotero_api_lock
-def add_by_url(
+async def add_by_url(
     url: str,
     collections: list[str] | str | None = None,
     tags: list[str] | str | None = None,
@@ -611,15 +616,15 @@ def add_by_url(
         # DOI URL routing
         doi = _helpers._normalize_doi(url)
         if doi:
-            return add_by_doi(doi=url, collections=collections, tags=tags, attach_mode=attach_mode, ctx=ctx)
+            return await add_by_doi(doi=url, collections=collections, tags=tags, attach_mode=attach_mode, ctx=ctx)
 
         # arXiv URL routing
         arxiv_id = _helpers._normalize_arxiv_id(url)
         if arxiv_id:
-            return _add_by_arxiv(arxiv_id, collections, tags, write_zot, ctx)
+            return await _add_by_arxiv(arxiv_id, collections, tags, write_zot, ctx)
 
         # Generic webpage
-        ctx.info(f"Creating webpage item for: {url}")
+        await ctx.info(f"Creating webpage item for: {url}")
         template = write_zot.item_template("webpage")
         template["url"] = url
         template["title"] = url
@@ -643,14 +648,14 @@ def add_by_url(
         return f"Failed to create item: {result}"
 
     except Exception as e:
-        ctx.error(f"Error adding by URL: {e}")
+        await ctx.error(f"Error adding by URL: {e}")
         return f"Error adding by URL: {e}"
 
 
 @with_zotero_api_lock
-def _add_by_arxiv(arxiv_id, collections, tags, write_zot, ctx):
+async def _add_by_arxiv(arxiv_id, collections, tags, write_zot, ctx):
     """Add an arXiv paper by ID. Internal helper for add_by_url."""
-    ctx.info(f"Fetching arXiv metadata for: {arxiv_id}")
+    await ctx.info(f"Fetching arXiv metadata for: {arxiv_id}")
 
     resp = None
     for attempt in range(3):
@@ -661,7 +666,7 @@ def _add_by_arxiv(arxiv_id, collections, tags, write_zot, ctx):
         )
         if resp.status_code == 429:
             wait = 5 * (2**attempt)  # 5s, 10s, 20s
-            ctx.info(f"arXiv API rate limit hit — waiting {wait}s before retry {attempt + 1}/3...")
+            await ctx.info(f"arXiv API rate limit hit — waiting {wait}s before retry {attempt + 1}/3...")
             _time.sleep(wait)
             continue
         break
@@ -745,7 +750,7 @@ def _add_by_arxiv(arxiv_id, collections, tags, write_zot, ctx):
                 )
             pdf_status = "PDF attached"
         except Exception as e:
-            ctx.info(f"arXiv PDF attachment failed (non-fatal): {e}")
+            await ctx.info(f"arXiv PDF attachment failed (non-fatal): {e}")
             pdf_status = f"no PDF attached ({e})"
 
         return (
@@ -764,7 +769,7 @@ def _add_by_arxiv(arxiv_id, collections, tags, write_zot, ctx):
 # ---------------------------------------------------------------------------
 
 
-def _lookup_isbn_openlibrary(isbn, ctx):
+async def _lookup_isbn_openlibrary(isbn, ctx):
     """Look up book metadata by ISBN on Open Library. Returns a dict of
     normalized fields, or None on miss / error. Network errors are logged
     and surfaced as None so the caller can fall through to Google Books.
@@ -825,14 +830,14 @@ def _lookup_isbn_openlibrary(isbn, ctx):
             "url": (record.get("url") or "").strip(),
         }
     except requests.RequestException as e:
-        ctx.info(f"Open Library lookup failed (non-fatal): {e}")
+        await ctx.info(f"Open Library lookup failed (non-fatal): {e}")
         return None
     except Exception as e:
-        ctx.info(f"Open Library parse failed (non-fatal): {e}")
+        await ctx.info(f"Open Library parse failed (non-fatal): {e}")
         return None
 
 
-def _lookup_isbn_google_books(isbn, ctx):
+async def _lookup_isbn_google_books(isbn, ctx):
     """Look up book metadata by ISBN on Google Books. Returns a dict of
     normalized fields, or None on miss / error."""
     try:
@@ -882,10 +887,10 @@ def _lookup_isbn_google_books(isbn, ctx):
             "url": (info.get("infoLink") or info.get("canonicalVolumeLink") or "").strip(),
         }
     except requests.RequestException as e:
-        ctx.info(f"Google Books lookup failed (non-fatal): {e}")
+        await ctx.info(f"Google Books lookup failed (non-fatal): {e}")
         return None
     except Exception as e:
-        ctx.info(f"Google Books parse failed (non-fatal): {e}")
+        await ctx.info(f"Google Books parse failed (non-fatal): {e}")
         return None
 
 
@@ -898,7 +903,7 @@ def _lookup_isbn_google_books(isbn, ctx):
         "includes the resolver source so you can audit metadata quality."
     ),
 )
-def add_by_isbn(
+async def add_by_isbn(
     isbn: str, collections: list[str] | str | None = None, tags: list[str] | str | None = None, *, ctx: Context
 ) -> str:
     try:
@@ -911,11 +916,11 @@ def add_by_isbn(
         if not normalized:
             return f"Error: '{isbn}' does not appear to be a valid ISBN (checksum failed or wrong length)."
 
-        ctx.info(f"Resolving ISBN {normalized} via Open Library...")
-        meta = _lookup_isbn_openlibrary(normalized, ctx)
+        await ctx.info(f"Resolving ISBN {normalized} via Open Library...")
+        meta = await _lookup_isbn_openlibrary(normalized, ctx)
         if not meta:
-            ctx.info("Open Library miss — falling back to Google Books...")
-            meta = _lookup_isbn_google_books(normalized, ctx)
+            await ctx.info("Open Library miss — falling back to Google Books...")
+            meta = await _lookup_isbn_google_books(normalized, ctx)
         if not meta:
             return f"ISBN not found on Open Library or Google Books: {normalized}"
 
@@ -964,7 +969,7 @@ def add_by_isbn(
         return f"Failed to create item: {result}"
 
     except Exception as e:
-        ctx.error(f"Error adding by ISBN: {e}")
+        await ctx.error(f"Error adding by ISBN: {e}")
         return f"Error adding by ISBN: {e}"
 
 
@@ -1021,7 +1026,7 @@ _UPDATE_ITEM_API_TO_PARAM = {
     ),
 )
 @with_zotero_api_lock
-def update_item(
+async def update_item(
     item_key: str,
     title: str | None = None,
     creators: list[dict] | str | None = None,
@@ -1065,7 +1070,7 @@ def update_item(
                 "'add_tags'/'remove_tags' (incremental). Use one approach or the other."
             )
 
-        ctx.info(f"Updating item {item_key}")
+        await ctx.info(f"Updating item {item_key}")
 
         # Fetch current item from write client for correct version
         item = write_zot.item(item_key)
@@ -1191,7 +1196,7 @@ def update_item(
             changes.append(f"- **collections**: added {coll_keys}")
         if collection_names is not None:
             names = _helpers._normalize_str_list_input(collection_names, "collection_names")
-            resolved = _helpers._resolve_collection_names(read_zot, names, ctx=ctx)
+            resolved = await _helpers._resolve_collection_names(read_zot, names, ctx=ctx)
             existing_colls = set(data.get("collections", []))
             existing_colls.update(resolved)
             data["collections"] = list(existing_colls)
@@ -1206,7 +1211,7 @@ def update_item(
             return "No changes to apply." + skip_warning
 
         resp = write_zot.update_item(item)
-        if _helpers._handle_write_response(resp, ctx):
+        if await _helpers._handle_write_response(resp, ctx):
             result = f"Successfully updated item `{item_key}`:\n\n" + "\n".join(changes)
             return result + skip_warning
         return "Failed to update item: write operation returned failure"
@@ -1214,7 +1219,7 @@ def update_item(
     except ValueError as e:
         return f"Input error: {e}"
     except Exception as e:
-        ctx.error(f"Error updating item: {e}")
+        await ctx.error(f"Error updating item: {e}")
         return f"Error updating item: {e}"
 
 
@@ -1229,7 +1234,7 @@ def update_item(
         "By default refuses to trash notes; set allow_note=True to override."
     ),
 )
-def delete_item(item_key: str, allow_note: bool = False, *, ctx: Context) -> str:
+async def delete_item(item_key: str, allow_note: bool = False, *, ctx: Context) -> str:
     """
     Move a Zotero item to the Trash.
 
@@ -1249,7 +1254,7 @@ def delete_item(item_key: str, allow_note: bool = False, *, ctx: Context) -> str
         return str(e)
 
     try:
-        ctx.info(f"Trashing item {item_key}")
+        await ctx.info(f"Trashing item {item_key}")
 
         try:
             item = write_zot.item(item_key)
@@ -1274,7 +1279,7 @@ def delete_item(item_key: str, allow_note: bool = False, *, ctx: Context) -> str
             write_zot.endpoint,
             f"/{write_zot.library_type}/{write_zot.library_id}/items/{item_key}",
         )
-        resp = write_zot.client.patch(
+        resp = cast(Any, write_zot.client).patch(
             url=url,
             headers={"If-Unmodified-Since-Version": str(item["version"])},
             content=json.dumps({"deleted": 1}),
@@ -1284,7 +1289,7 @@ def delete_item(item_key: str, allow_note: bool = False, *, ctx: Context) -> str
         return f"Failed to trash item {item_key} (HTTP {resp.status_code}): {resp.text[:200]}"
 
     except Exception as e:
-        ctx.error(f"Error trashing item: {str(e)}")
+        await ctx.error(f"Error trashing item: {str(e)}")
         return f"Error trashing item: {str(e)}"
 
 
@@ -1315,7 +1320,7 @@ def delete_item(item_key: str, allow_note: bool = False, *, ctx: Context) -> str
     ),
 )
 @with_zotero_api_lock
-def find_duplicates(
+async def find_duplicates(
     method: Literal["title", "doi", "both"] = "both",
     collection_key: str | None = None,
     limit: int | str | None = 50,
@@ -1325,7 +1330,7 @@ def find_duplicates(
     try:
         zot = _client.get_zotero_client()
         limit = _helpers._normalize_limit(limit, default=50)
-        ctx.info(f"Searching for duplicates (method={method})")
+        await ctx.info(f"Searching for duplicates (method={method})")
 
         # Paginate manually instead of using zot.everything() which can
         # cause "cannot pickle '_thread.RLock' object" in MCP contexts.
@@ -1334,9 +1339,9 @@ def find_duplicates(
         page_size = 100
         while True:
             if collection_key:
-                batch = zot.collection_items(collection_key, start=start, limit=page_size)
+                batch = await asyncio.to_thread(zot.collection_items, collection_key, start=start, limit=page_size)
             else:
-                batch = zot.items(start=start, limit=page_size)
+                batch = await asyncio.to_thread(zot.items, start=start, limit=page_size)
             if not batch:
                 break
             items.extend(batch)
@@ -1413,7 +1418,7 @@ def find_duplicates(
         return "\n".join(lines)
 
     except Exception as e:
-        ctx.error(f"Error finding duplicates: {e}")
+        await ctx.error(f"Error finding duplicates: {e}")
         return f"Error finding duplicates: {e}"
 
 
@@ -1444,7 +1449,9 @@ def find_duplicates(
     ),
 )
 @with_zotero_api_lock
-def merge_duplicates(keeper_key: str, duplicate_keys: list[str] | str, confirm: bool = False, *, ctx: Context) -> str:
+async def merge_duplicates(
+    keeper_key: str, duplicate_keys: list[str] | str, confirm: bool = False, *, ctx: Context
+) -> str:
     try:
         read_zot, write_zot = _helpers._get_write_client(ctx)
     except ValueError as e:
@@ -1456,7 +1463,7 @@ def merge_duplicates(keeper_key: str, duplicate_keys: list[str] | str, confirm: 
         # Safety: remove keeper from duplicates
         if keeper_key in dup_keys:
             dup_keys.remove(keeper_key)
-            ctx.warning(f"Keeper key '{keeper_key}' was in duplicate list — removed.")
+            await ctx.warning(f"Keeper key '{keeper_key}' was in duplicate list — removed.")
 
         if not dup_keys:
             return "Error: No duplicate keys to merge (after removing keeper if present)."
@@ -1537,7 +1544,7 @@ def merge_duplicates(keeper_key: str, duplicate_keys: list[str] | str, confirm: 
             return "\n".join(lines)
 
         # EXECUTE MERGE
-        ctx.info(f"Merging {len(dup_keys)} duplicates into {keeper_key}")
+        await ctx.info(f"Merging {len(dup_keys)} duplicates into {keeper_key}")
 
         # Step 3: Consolidate tags
         if new_tags:
@@ -1545,15 +1552,15 @@ def merge_duplicates(keeper_key: str, duplicate_keys: list[str] | str, confirm: 
             existing_tags = [t.get("tag", "") for t in keeper_data.get("tags", [])]
             keeper_data["tags"] = [{"tag": t} for t in sorted(set(existing_tags) | all_tags)]
             resp = write_zot.update_item(keeper)
-            if not _helpers._handle_write_response(resp, ctx):
+            if not await _helpers._handle_write_response(resp, ctx):
                 return "Error: Failed to merge tags into keeper."
             keeper = write_zot.item(keeper_key)  # re-fetch for version
 
         # Step 4: Consolidate collections
         for coll_key in new_collections:
             resp = write_zot.addto_collection(coll_key, keeper)
-            if not _helpers._handle_write_response(resp, ctx):
-                ctx.warning(f"Failed to add keeper to collection {coll_key}")
+            if not await _helpers._handle_write_response(resp, ctx):
+                await ctx.warning(f"Failed to add keeper to collection {coll_key}")
             keeper = write_zot.item(keeper_key)  # re-fetch for version
 
         # Step 5: Re-parent children (skip duplicate attachments)
@@ -1579,7 +1586,7 @@ def merge_duplicates(keeper_key: str, duplicate_keys: list[str] | str, confirm: 
                             continue  # Skip — keeper already has this attachment
                     fresh_child.get("data", {})["parentItem"] = keeper_key
                     resp = write_zot.update_item(fresh_child)
-                    if _helpers._handle_write_response(resp, ctx):
+                    if await _helpers._handle_write_response(resp, ctx):
                         moved.append(child_key)
                     else:
                         failed.append(child_key)
@@ -1611,7 +1618,7 @@ def merge_duplicates(keeper_key: str, duplicate_keys: list[str] | str, confirm: 
                 )
                 headers = {"If-Unmodified-Since-Version": str(version)}
                 rate_limit("zotero")
-                resp = write_zot.client.patch(
+                resp = cast(Any, write_zot.client).patch(
                     url=url,
                     headers=headers,
                     content=json.dumps({"deleted": 1}),
@@ -1619,9 +1626,9 @@ def merge_duplicates(keeper_key: str, duplicate_keys: list[str] | str, confirm: 
                 if resp.status_code in (200, 204):
                     trashed.append(dup_key)
                 else:
-                    ctx.warning(f"Failed to trash {dup_key}: HTTP {resp.status_code}")
+                    await ctx.warning(f"Failed to trash {dup_key}: HTTP {resp.status_code}")
             except Exception as e:
-                ctx.warning(f"Failed to trash {dup_key}: {e}")
+                await ctx.warning(f"Failed to trash {dup_key}: {e}")
 
         skip_info = f" ({len(skipped_dupes)} duplicate attachments skipped)" if skipped_dupes else ""
         return (
@@ -1636,7 +1643,7 @@ def merge_duplicates(keeper_key: str, duplicate_keys: list[str] | str, confirm: 
     except ValueError as e:
         return f"Input error: {e}"
     except Exception as e:
-        ctx.error(f"Error merging duplicates: {e}")
+        await ctx.error(f"Error merging duplicates: {e}")
         return f"Error merging duplicates: {e}"
 
 
@@ -1661,13 +1668,13 @@ def merge_duplicates(keeper_key: str, duplicate_keys: list[str] | str, confirm: 
     ),
 )
 @with_zotero_api_lock
-def get_pdf_outline(item_key: str, *, ctx: Context) -> str:
+async def get_pdf_outline(item_key: str, *, ctx: Context) -> str:
     try:
-        zot = _client.get_zotero_client()
-        ctx.info(f"Getting PDF outline for item {item_key}")
+        zot = await asyncio.to_thread(_client.get_zotero_client)
+        await ctx.info(f"Getting PDF outline for item {item_key}")
 
         # Find PDF attachment
-        children = zot.children(item_key)
+        children = await asyncio.to_thread(zot.children, item_key)
         pdf_child = None
         for child in children:
             if child.get("data", {}).get("contentType") == "application/pdf":
@@ -1687,7 +1694,7 @@ def get_pdf_outline(item_key: str, *, ctx: Context) -> str:
 
         # Download PDF (works for both local/WebDAV/web storage)
         with tempfile.TemporaryDirectory() as tmpdir:
-            zot.dump(attachment_key, filename=filename, path=tmpdir)
+            await asyncio.to_thread(zot.dump, attachment_key, filename=filename, path=tmpdir)
             pdf_path = os.path.join(tmpdir, filename)
             if not os.path.exists(pdf_path) or os.path.getsize(pdf_path) == 0:
                 return f"Could not download PDF for attachment `{attachment_key}`."
@@ -1706,7 +1713,7 @@ def get_pdf_outline(item_key: str, *, ctx: Context) -> str:
         return "\n".join(lines)
 
     except Exception as e:
-        ctx.error(f"Error extracting PDF outline: {e}")
+        await ctx.error(f"Error extracting PDF outline: {e}")
         return f"Error extracting PDF outline: {e}"
 
 
@@ -1736,7 +1743,7 @@ def get_pdf_outline(item_key: str, *, ctx: Context) -> str:
     ),
 )
 @with_zotero_api_lock
-def add_from_file(
+async def add_from_file(
     file_path: str,
     title: str | None = None,
     item_type: str = "document",
@@ -1771,7 +1778,7 @@ def add_from_file(
         if ext not in allowed_exts:
             return f"Error: Unsupported file type '{ext}'. Allowed: {', '.join(sorted(allowed_exts))}"
 
-        ctx.info(f"Adding file: {file_path}")
+        await ctx.info(f"Adding file: {file_path}")
 
         # Try DOI extraction from PDF
         extracted_doi = None
@@ -1793,7 +1800,8 @@ def add_from_file(
 
                 # Scan first page text
                 if not extracted_doi and doc.page_count > 0:
-                    text = doc[0].get_text()[:3000]
+                    page_text = doc[0].get_text()
+                    text = page_text[:3000] if isinstance(page_text, str) else ""
                     m = re.search(r"10\.\d{4,9}/[^\s]+", text)
                     if m:
                         found_doi = _helpers._normalize_doi(m.group(0))
@@ -1802,12 +1810,12 @@ def add_from_file(
 
                 doc.close()
             except Exception as e:
-                ctx.info(f"DOI extraction failed (non-fatal): {e}")
+                await ctx.info(f"DOI extraction failed (non-fatal): {e}")
 
         # Create the metadata item
         if extracted_doi:
-            ctx.info(f"Found DOI: {extracted_doi}")
-            result_msg = add_by_doi(doi=extracted_doi, collections=collections, tags=tags, ctx=ctx)
+            await ctx.info(f"Found DOI: {extracted_doi}")
+            result_msg = await add_by_doi(doi=extracted_doi, collections=collections, tags=tags, ctx=ctx)
             # Extract item key from result
             key_match = re.search(r"Item key: `([^`]+)`", result_msg)
             if key_match:
@@ -1852,5 +1860,5 @@ def add_from_file(
         )
 
     except Exception as e:
-        ctx.error(f"Error adding from file: {e}")
+        await ctx.error(f"Error adding from file: {e}")
         return f"Error adding from file: {e}"

@@ -134,21 +134,23 @@ def _patch_local_only(monkeypatch, fake_zot):
 class TestCreateCollection:
     """Tests for the create_collection tool function."""
 
-    def test_happy_path(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_happy_path(self, monkeypatch, fake_zot, ctx):
         """Create a simple collection and verify name and key are returned."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        result = server.create_collection(name="New Collection", ctx=ctx)
+        result = await server.create_collection(name="New Collection", ctx=ctx)
 
         assert "NEWCOL0000" in result
         assert len(fake_zot.created_collections) == 1
         assert fake_zot.created_collections[0]["name"] == "New Collection"
 
-    def test_with_parent_collection_key(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_with_parent_collection_key(self, monkeypatch, fake_zot, ctx):
         """parent_collection as an 8-char alphanumeric key is passed directly."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        result = server.create_collection(
+        result = await server.create_collection(
             name="Sub Collection",
             parent_collection="ABC00001",
             ctx=ctx,
@@ -158,11 +160,12 @@ class TestCreateCollection:
         created = fake_zot.created_collections[0]
         assert created["parentCollection"] == "ABC00001"
 
-    def test_with_parent_collection_name(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_with_parent_collection_name(self, monkeypatch, fake_zot, ctx):
         """parent_collection as a name is resolved via _resolve_collection_names."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        result = server.create_collection(
+        result = await server.create_collection(
             name="Sub Collection",
             parent_collection="Machine Learning",
             ctx=ctx,
@@ -173,7 +176,8 @@ class TestCreateCollection:
         # Should resolve "Machine Learning" -> "ABC00001"
         assert created["parentCollection"] == "ABC00001"
 
-    def test_hybrid_mode_uses_web_write(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_hybrid_mode_uses_web_write(self, monkeypatch, fake_zot, ctx):
         """In hybrid mode, read_zot is used for name resolution but
         write_zot is used for the actual create_collections call."""
         read_zot = FakeZoteroCollections()
@@ -182,22 +186,24 @@ class TestCreateCollection:
 
         _patch_hybrid(monkeypatch, read_zot, write_zot)
 
-        result = server.create_collection(name="Hybrid Test", ctx=ctx)
+        result = await server.create_collection(name="Hybrid Test", ctx=ctx)
 
         assert "NEWCOL0000" in result
         # Write should go to write_zot, not read_zot
         assert len(write_zot.created_collections) == 1
         assert len(read_zot.created_collections) == 0
 
-    def test_local_only_mode_returns_error(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_local_only_mode_returns_error(self, monkeypatch, fake_zot, ctx):
         """In local-only mode (no web credentials), return clear error."""
         _patch_local_only(monkeypatch, fake_zot)
 
-        result = server.create_collection(name="Should Fail", ctx=ctx)
+        result = await server.create_collection(name="Should Fail", ctx=ctx)
 
         assert "local-only mode" in result.lower() or "hybrid mode" in result.lower()
 
-    def test_response_parsing_extracts_key(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_response_parsing_extracts_key(self, monkeypatch, fake_zot, ctx):
         """The collection key is extracted from response['success']['0']."""
         _patch_web_only(monkeypatch, fake_zot)
 
@@ -208,15 +214,16 @@ class TestCreateCollection:
 
         fake_zot.create_collections = custom_create
 
-        result = server.create_collection(name="Custom Key", ctx=ctx)
+        result = await server.create_collection(name="Custom Key", ctx=ctx)
 
         assert "MYCUSTOM" in result
 
-    def test_parent_name_not_found_returns_error(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_parent_name_not_found_returns_error(self, monkeypatch, fake_zot, ctx):
         """Passing a parent_collection name that doesn't match any collection."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        result = server.create_collection(
+        result = await server.create_collection(
             name="Orphan",
             parent_collection="Nonexistent Collection",
             ctx=ctx,
@@ -224,11 +231,12 @@ class TestCreateCollection:
 
         assert "error" in result.lower() or "no collection found" in result.lower()
 
-    def test_no_parent_sets_false(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_no_parent_sets_false(self, monkeypatch, fake_zot, ctx):
         """When parent_collection is None, parentCollection should be False."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        server.create_collection(name="Top Level", ctx=ctx)
+        await server.create_collection(name="Top Level", ctx=ctx)
 
         created = fake_zot.created_collections[0]
         assert created["parentCollection"] is False
@@ -242,66 +250,73 @@ class TestCreateCollection:
 class TestSearchCollections:
     """Tests for the search_collections tool function."""
 
-    def test_happy_path_find_by_name(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_happy_path_find_by_name(self, monkeypatch, fake_zot, ctx):
         """Search for a collection by exact name substring."""
         monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake_zot)
 
-        result = server.search_collections(query="Machine Learning", ctx=ctx)
+        result = await server.search_collections(query="Machine Learning", ctx=ctx)
 
         assert "Machine Learning" in result
         assert "ABC00001" in result
 
-    def test_case_insensitive_search(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_case_insensitive_search(self, monkeypatch, fake_zot, ctx):
         """Search is case-insensitive."""
         monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake_zot)
 
-        result = server.search_collections(query="machine learning", ctx=ctx)
+        result = await server.search_collections(query="machine learning", ctx=ctx)
 
         assert "Machine Learning" in result or "ABC00001" in result
 
-    def test_partial_match(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_partial_match(self, monkeypatch, fake_zot, ctx):
         """Search for a substring should match collections containing it."""
         monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake_zot)
 
-        result = server.search_collections(query="Learning", ctx=ctx)
+        result = await server.search_collections(query="Learning", ctx=ctx)
 
         # Should match both "Machine Learning" and "Deep Learning"
         assert "ABC00001" in result
         assert "ABC00002" in result
 
-    def test_no_matches_returns_message(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_no_matches_returns_message(self, monkeypatch, fake_zot, ctx):
         """When no collections match, return an informative message."""
         monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake_zot)
 
-        result = server.search_collections(query="Quantum Physics", ctx=ctx)
+        result = await server.search_collections(query="Quantum Physics", ctx=ctx)
 
         assert "no collection" in result.lower() or "0" in result
 
-    def test_empty_library_returns_message(self, monkeypatch, ctx):
+    @pytest.mark.asyncio
+    async def test_empty_library_returns_message(self, monkeypatch, ctx):
         """Empty library (no collections) returns an informative message."""
         empty_zot = FakeZoteroCollections()
         empty_zot._collections = []
         monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: empty_zot)
 
-        result = server.search_collections(query="anything", ctx=ctx)
+        result = await server.search_collections(query="anything", ctx=ctx)
 
         assert "no collection" in result.lower() or "0" in result
 
-    def test_returns_parent_info(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_returns_parent_info(self, monkeypatch, fake_zot, ctx):
         """Results should include parent collection info when present."""
         monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake_zot)
 
-        result = server.search_collections(query="Deep Learning", ctx=ctx)
+        result = await server.search_collections(query="Deep Learning", ctx=ctx)
 
         assert "ABC00002" in result
         # Should mention parent key or parent name
         assert "ABC00001" in result or "Machine Learning" in result
 
-    def test_returns_item_count(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_returns_item_count(self, monkeypatch, fake_zot, ctx):
         """Results should include number of items in each collection."""
         monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake_zot)
 
-        result = server.search_collections(query="NLP", ctx=ctx)
+        result = await server.search_collections(query="NLP", ctx=ctx)
 
         assert "ABC00003" in result
 
@@ -314,11 +329,12 @@ class TestSearchCollections:
 class TestManageCollections:
     """Tests for the manage_collections tool function."""
 
-    def test_add_items_to_collection(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_add_items_to_collection(self, monkeypatch, fake_zot, ctx):
         """Add items to a collection."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        result = server.manage_collections(
+        result = await server.manage_collections(
             item_keys=["ITEM0001"],
             add_to=["ABC00003"],
             ctx=ctx,
@@ -329,11 +345,12 @@ class TestManageCollections:
         assert coll_key == "ABC00003"
         assert "success" in result.lower() or "added" in result.lower()
 
-    def test_remove_items_from_collection(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_remove_items_from_collection(self, monkeypatch, fake_zot, ctx):
         """Remove items from a collection."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        result = server.manage_collections(
+        result = await server.manage_collections(
             item_keys=["ITEM0002"],
             remove_from=["ABC00003"],
             ctx=ctx,
@@ -344,11 +361,12 @@ class TestManageCollections:
         assert coll_key == "ABC00003"
         assert "success" in result.lower() or "removed" in result.lower()
 
-    def test_add_and_remove_in_one_call(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_add_and_remove_in_one_call(self, monkeypatch, fake_zot, ctx):
         """Both add_to and remove_from in a single call."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        result = server.manage_collections(
+        result = await server.manage_collections(
             item_keys=["ITEM0001"],
             add_to=["ABC00003"],
             remove_from=["ABC00001"],
@@ -359,11 +377,12 @@ class TestManageCollections:
         assert len(fake_zot.removed_from_collections) >= 1
         assert "success" in result.lower() or "added" in result.lower()
 
-    def test_item_keys_as_json_string(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_item_keys_as_json_string(self, monkeypatch, fake_zot, ctx):
         """item_keys passed as a JSON string should be normalized."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        result = server.manage_collections(
+        result = await server.manage_collections(
             item_keys='["ITEM0001", "ITEM0002"]',
             add_to=["ABC00002"],
             ctx=ctx,
@@ -373,11 +392,12 @@ class TestManageCollections:
         assert len(fake_zot.added_to_collections) >= 1
         assert "success" in result.lower() or "added" in result.lower()
 
-    def test_add_to_as_json_string(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_add_to_as_json_string(self, monkeypatch, fake_zot, ctx):
         """add_to passed as a JSON string should be normalized."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        server.manage_collections(
+        await server.manage_collections(
             item_keys=["ITEM0001"],
             add_to='["ABC00002", "ABC00003"]',
             ctx=ctx,
@@ -385,11 +405,12 @@ class TestManageCollections:
 
         assert len(fake_zot.added_to_collections) >= 2
 
-    def test_remove_from_as_json_string(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_remove_from_as_json_string(self, monkeypatch, fake_zot, ctx):
         """remove_from passed as a JSON string should be normalized."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        server.manage_collections(
+        await server.manage_collections(
             item_keys=["ITEM0001"],
             remove_from='["ABC00001"]',
             ctx=ctx,
@@ -397,11 +418,12 @@ class TestManageCollections:
 
         assert len(fake_zot.removed_from_collections) >= 1
 
-    def test_single_string_item_key(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_single_string_item_key(self, monkeypatch, fake_zot, ctx):
         """A single item_key string (not a list) should be normalized to a list."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        server.manage_collections(
+        await server.manage_collections(
             item_keys="ITEM0001",
             add_to=["ABC00002"],
             ctx=ctx,
@@ -409,7 +431,8 @@ class TestManageCollections:
 
         assert len(fake_zot.added_to_collections) >= 1
 
-    def test_hybrid_mode_fetches_from_write_client(self, monkeypatch, ctx):
+    @pytest.mark.asyncio
+    async def test_hybrid_mode_fetches_from_write_client(self, monkeypatch, ctx):
         """In hybrid mode, items are fetched from write_zot (not read_zot)
         since the version number must match the server the write goes to."""
         read_zot = FakeZoteroCollections()
@@ -427,7 +450,7 @@ class TestManageCollections:
 
         _patch_hybrid(monkeypatch, read_zot, write_zot)
 
-        server.manage_collections(
+        await server.manage_collections(
             item_keys=["ITEM0001"],
             add_to=["COL001"],
             ctx=ctx,
@@ -436,11 +459,12 @@ class TestManageCollections:
         # Write operations should go through write_zot
         assert len(write_zot.added_to_collections) >= 1
 
-    def test_local_only_mode_returns_error(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_local_only_mode_returns_error(self, monkeypatch, fake_zot, ctx):
         """In local-only mode, return clear error."""
         _patch_local_only(monkeypatch, fake_zot)
 
-        result = server.manage_collections(
+        result = await server.manage_collections(
             item_keys=["ITEM0001"],
             add_to=["ABC00001"],
             ctx=ctx,
@@ -448,23 +472,25 @@ class TestManageCollections:
 
         assert "local-only mode" in result.lower() or "hybrid mode" in result.lower()
 
-    def test_no_add_or_remove_returns_error(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_no_add_or_remove_returns_error(self, monkeypatch, fake_zot, ctx):
         """Must specify at least one of add_to or remove_from."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        result = server.manage_collections(
+        result = await server.manage_collections(
             item_keys=["ITEM0001"],
             ctx=ctx,
         )
 
         assert "error" in result.lower() or "must specify" in result.lower()
 
-    def test_collection_name_resolution_in_add_to(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_collection_name_resolution_in_add_to(self, monkeypatch, fake_zot, ctx):
         """add_to values are passed directly as collection keys (no name resolution).
         The implementation uses _normalize_str_list_input, not _resolve_collection_names."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        server.manage_collections(
+        await server.manage_collections(
             item_keys=["ITEM0001"],
             add_to=["NLP Papers"],
             ctx=ctx,
@@ -475,11 +501,12 @@ class TestManageCollections:
             coll_key, _ = fake_zot.added_to_collections[0]
             assert coll_key == "NLP Papers"
 
-    def test_multiple_items_batched(self, monkeypatch, fake_zot, ctx):
+    @pytest.mark.asyncio
+    async def test_multiple_items_batched(self, monkeypatch, fake_zot, ctx):
         """Multiple items should all be processed."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        result = server.manage_collections(
+        result = await server.manage_collections(
             item_keys=["ITEM0001", "ITEM0002"],
             add_to=["ABC00002"],
             ctx=ctx,

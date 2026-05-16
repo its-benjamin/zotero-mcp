@@ -12,7 +12,7 @@ import random
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 try:
     import chromadb
@@ -64,7 +64,7 @@ class OpenAIEmbeddingFunction(EmbeddingFunction):
         try:
             import openai
 
-            client_kwargs = {"api_key": self.api_key}
+            client_kwargs: dict[str, Any] = {"api_key": self.api_key}
             if self.base_url:
                 client_kwargs["base_url"] = self.base_url
             self.client = openai.OpenAI(**client_kwargs)
@@ -133,7 +133,7 @@ class OpenAIEmbeddingFunction(EmbeddingFunction):
                 model=self.model_name,
                 input=input,
             )
-            return [data.embedding for data in response.data]
+            return cast(Embeddings, [data.embedding for data in response.data])
         vecs: list = []
         for i in range(0, len(input), batch_size):
             sub = input[i : i + batch_size]
@@ -143,11 +143,11 @@ class OpenAIEmbeddingFunction(EmbeddingFunction):
                 input=sub,
             )
             vecs.extend(data.embedding for data in response.data)
-        return vecs
+        return cast(Embeddings, vecs)
 
     def embed_query(self, text: str) -> list[float]:
         """Embed a query string. No special handling needed for OpenAI."""
-        return self.__call__([text])[0]
+        return cast(list[float], self.__call__([text])[0])
 
     def truncate(self, text: str, max_tokens: int) -> str:
         """Truncate using tiktoken cl100k_base (correct for OpenAI models)."""
@@ -236,11 +236,11 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
             from google import genai
             from google.genai import types
 
-            client_kwargs = {"api_key": self.api_key}
+            client_kwargs_genai: dict[str, Any] = {"api_key": self.api_key}
             if self.base_url:
-                http_options = types.HttpOptions(baseUrl=self.base_url)
-                client_kwargs["http_options"] = http_options
-            self.client = genai.Client(**client_kwargs)
+                http_options = types.HttpOptions(base_url=self.base_url)  # type: ignore[call-arg]
+                client_kwargs_genai["http_options"] = http_options
+            self.client = genai.Client(**client_kwargs_genai)
             self.types = types
             self.rate_limited = True
         except ImportError:
@@ -562,12 +562,12 @@ class VoyageEmbeddingFunction(EmbeddingFunction):
         if self.base_url and self.base_url != self._BASE_URL:
             client_kwargs["base_url"] = self.base_url
         try:
-            return voyageai.Client(**client_kwargs)
+            return voyageai.Client(**client_kwargs)  # type: ignore[attr-defined]
         except TypeError:
             # Older clients may not accept custom base_url. Prefer a working
             # official client over failing setup for users on the default API.
             client_kwargs.pop("base_url", None)
-            return voyageai.Client(**client_kwargs)
+            return voyageai.Client(**client_kwargs)  # type: ignore[attr-defined]
 
     def _estimate_tokens(self, texts: list[str]) -> int:
         try:
@@ -715,7 +715,7 @@ class VoyageEmbeddingFunction(EmbeddingFunction):
 
     def __call__(self, input: Documents) -> Embeddings:
         """Generate document embeddings using Voyage AI."""
-        return self._embed(list(input), input_type="document")
+        return cast(Embeddings, self._embed(list(input), input_type="document"))
 
     def embed_query(self, text: str) -> list[float]:
         """Embed a query string using Voyage's query input type."""
@@ -1003,7 +1003,7 @@ class ChromaClient:
             ids: List of unique IDs for each document
         """
         try:
-            self.collection.add(documents=documents, metadatas=metadatas, ids=ids)
+            self.collection.add(documents=documents, metadatas=cast(Any, metadatas), ids=ids)
             logger.info(f"Added {len(documents)} documents to ChromaDB collection")
         except Exception as e:
             logger.error(f"Error adding documents to ChromaDB: {e}")
@@ -1019,7 +1019,7 @@ class ChromaClient:
             ids: List of unique IDs for each document
         """
         try:
-            self.collection.upsert(documents=documents, metadatas=metadatas, ids=ids)
+            self.collection.upsert(documents=documents, metadatas=cast(Any, metadatas), ids=ids)
             logger.info(f"Upserted {len(documents)} documents to ChromaDB collection")
         except Exception as e:
             logger.error(f"Error upserting documents to ChromaDB: {e}")
@@ -1076,7 +1076,7 @@ class ChromaClient:
 
             results = self.collection.query(**query_kwargs)
             logger.info(f"Semantic search returned {len(results.get('ids', [[]])[0])} results")
-            return results
+            return cast(dict[str, Any], results)
         except Exception as e:
             logger.error(f"Error performing semantic search: {e}")
             raise
@@ -1146,9 +1146,9 @@ class ChromaClient:
             Metadata dictionary if document exists, None otherwise
         """
         try:
-            result = self.collection.get(ids=[doc_id], include=["metadatas"])
+            result = self.collection.get(ids=[doc_id], include=["metadatas"])  # type: ignore[list-item]
             if result["ids"] and result["metadatas"]:
-                return result["metadatas"][0]
+                return cast(dict[str, Any], result["metadatas"][0])
             return None
         except Exception:
             return None

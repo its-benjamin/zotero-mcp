@@ -6,13 +6,13 @@ import pytest
 class DummyContext:
     """No-op MCP context for unit tests."""
 
-    def info(self, *_args, **_kwargs):
+    async def info(self, *_args, **_kwargs):
         return None
 
-    def error(self, *_args, **_kwargs):
+    async def error(self, *_args, **_kwargs):
         return None
 
-    def warning(self, *_args, **_kwargs):
+    async def warning(self, *_args, **_kwargs):
         return None
 
 

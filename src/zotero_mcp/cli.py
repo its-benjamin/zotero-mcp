@@ -536,7 +536,8 @@ def main():
                 if common:
                     print("Common titles:")
                     for t, c in common:
-                        print(f"  {t[:80]}{'...' if len(t) > 80 else ''}: {c}")
+                        ts = str(t)
+                        print(f"  {ts[:80]}{'...' if len(ts) > 80 else ''}: {c}")
                 return
 
             include = ["metadatas"]
@@ -544,7 +545,7 @@ def main():
                 include.append("documents")
 
             # Fetch up to limit; filter client-side if requested
-            data = col.get(limit=args.limit, include=include)
+            data = col.get(limit=args.limit, include=include)  # type: ignore[arg-type]
 
             print("=== Semantic DB Inspection ===")
             total = client.get_collection_info().get("count", 0)
@@ -552,7 +553,7 @@ def main():
             print(f"Showing up to: {args.limit}")
 
             shown = 0
-            for i, meta in enumerate(data.get("metadatas", [])):
+            for i, meta in enumerate(data.get("metadatas") or []):
                 meta = meta or {}
                 title = meta.get("title", "")
                 creators = meta.get("creators", "")

@@ -15,6 +15,7 @@ Scite MCP server: https://scite.ai/mcp
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from zotero_mcp import client as _client
@@ -123,7 +124,7 @@ def enrich_items(items: list[dict]) -> dict[str, dict[str, str]]:
     ),
 )
 @with_zotero_api_lock
-def enrich_item(
+async def enrich_item(
     doi: str | None = None,
     item_key: str | None = None,
     *,
@@ -136,9 +137,9 @@ def enrich_item(
 
         # Resolve DOI from Zotero item if needed
         if not doi and item_key:
-            ctx.info(f"Looking up DOI for Zotero item {item_key}")
+            await ctx.info(f"Looking up DOI for Zotero item {item_key}")
             zot = _client.get_zotero_client()
-            item = zot.item(item_key)
+            item = await asyncio.to_thread(zot.item, item_key)
             if not item:
                 return f"Error: Zotero item '{item_key}' not found"
             doi = _extract_doi(item)
@@ -146,7 +147,8 @@ def enrich_item(
                 return f"Error: no DOI found for Zotero item '{item_key}'"
 
         doi = _helpers._normalize_doi(doi) or doi
-        ctx.info(f"Fetching Scite data for {doi}")
+        assert doi is not None
+        await ctx.info(f"Fetching Scite data for {doi}")
 
         # Fetch tally + paper metadata in parallel-ish (same thread, two requests)
         tally = _scite.get_tally(doi)
@@ -188,7 +190,7 @@ def enrich_item(
         return "\n".join(output)
 
     except Exception as e:
-        ctx.error(f"Error enriching item: {e}")
+        await ctx.error(f"Error enriching item: {e}")
         return f"Error enriching item: {e}"
 
 
@@ -202,7 +204,7 @@ def enrich_item(
     ),
 )
 @with_zotero_api_lock
-def enrich_search(
+async def enrich_search(
     query: str,
     limit: int | str = 10,
     *,
@@ -216,14 +218,18 @@ def enrich_search(
         zot = _client.get_zotero_client()
         limit_int = _helpers._normalize_limit(limit, default=10)
 
-        ctx.info(f"Searching Zotero for '{query}' and enriching with Scite data")
-        zot.add_parameters(
-            q=query,
-            qmode="titleCreatorYear",
-            itemType="-attachment",
-            limit=limit_int,
-        )
-        results = zot.items()
+        await ctx.info(f"Searching Zotero for '{query}' and enriching with Scite data")
+
+        def _fetch_scite_results():
+            zot.add_parameters(
+                q=query,
+                qmode="titleCreatorYear",
+                itemType="-attachment",
+                limit=limit_int,
+            )
+            return zot.items()
+
+        results = await asyncio.to_thread(_fetch_scite_results)
 
         if not results:
             return f"No items found matching query: '{query}'"
@@ -247,7 +253,7 @@ def enrich_search(
         return "\n".join(output)
 
     except Exception as e:
-        ctx.error(f"Error in enriched search: {e}")
+        await ctx.error(f"Error in enriched search: {e}")
         return f"Error in enriched search: {e}"
 
 
@@ -260,7 +266,7 @@ def enrich_search(
     ),
 )
 @with_zotero_api_lock
-def check_retractions(
+async def check_retractions(
     collection: str | None = None,
     tag: str | None = None,
     limit: int | str = 50,
@@ -274,18 +280,23 @@ def check_retractions(
 
         # Fetch items
         if collection:
-            ctx.info(f"Checking collection '{collection}' for retractions")
-            keys = _helpers._resolve_collection_names(zot, [collection], ctx)
+            await ctx.info(f"Checking collection '{collection}' for retractions")
+            keys = await _helpers._resolve_collection_names(zot, [collection], ctx)
             if not keys:
                 return f"Collection '{collection}' not found"
-            items = zot.collection_items(keys[0], limit=limit_int, itemType="-attachment")
+            items = await asyncio.to_thread(zot.collection_items, keys[0], limit=limit_int, itemType="-attachment")
         elif tag:
-            ctx.info(f"Checking items tagged '{tag}' for retractions")
-            zot.add_parameters(tag=tag, itemType="-attachment", limit=limit_int)
-            items = zot.items()
+            await ctx.info(f"Checking items tagged '{tag}' for retractions")
+
+            def _fetch_tag_items():
+                zot.add_parameters(tag=tag, itemType="-attachment", limit=limit_int)
+                return zot.items()
+
+            items = await asyncio.to_thread(_fetch_tag_items)
         else:
-            ctx.info("Checking recent items for retractions")
-            items = zot.items(
+            await ctx.info("Checking recent items for retractions")
+            items = await asyncio.to_thread(
+                zot.items,
                 sort="dateModified",
                 direction="desc",
                 limit=limit_int,
@@ -305,7 +316,7 @@ def check_retractions(
         if not doi_items:
             return f"None of the {len(items)} items have DOIs — cannot check Scite."
 
-        ctx.info(f"Checking {len(doi_items)} DOIs against Scite editorial notices")
+        await ctx.info(f"Checking {len(doi_items)} DOIs against Scite editorial notices")
         papers = _scite.get_papers_batch(list(doi_items.keys()))
 
         if not papers:
@@ -346,5 +357,5 @@ def check_retractions(
         return "\n".join(output)
 
     except Exception as e:
-        ctx.error(f"Error checking retractions: {e}")
+        await ctx.error(f"Error checking retractions: {e}")
         return f"Error checking retractions: {e}"

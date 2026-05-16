@@ -38,7 +38,7 @@ class ZoteroBetterBibTexAPI:
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
 
-    def _make_request(self, method: str, params: list[Any]) -> dict[str, Any]:
+    def _make_request(self, method: str, params: list[Any]) -> Any:
         """
         Make a JSON-RPC request to the Zotero API.
 
@@ -137,7 +137,7 @@ class ZoteroBetterBibTexAPI:
             # Return basic item data from search
             return item
 
-    def get_attachments(self, citekey: str, library_id: int) -> list[dict[str, Any]]:
+    def get_attachments(self, citekey: str, library_id: int | str) -> list[dict[str, Any]]:
         """
         Get all attachments for an item.
 

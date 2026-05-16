@@ -2,10 +2,12 @@
 Zotero client wrapper for MCP server.
 """
 
+import asyncio
+import contextvars
 import functools
+import inspect
 import logging
 import os
-import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,23 +25,48 @@ _logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Serialize all Zotero API access. The local API (port 23119) is single-threaded;
-# concurrent requests from parallel MCP tool threads queue at the network layer and
-# risk hitting pyzotero's 30s timeout. A process-local semaphore ensures only one
-# request is in-flight at a time — the rest queue in-process (microseconds) instead
-# of at the API (seconds/timeout). Use an RLock because top-level tools can call
-# decorated helper functions in the same thread.
-_zotero_api_lock = threading.RLock()
+# concurrent requests from parallel MCP tools queue at the network layer and risk
+# hitting pyzotero's 30s timeout. A process-local async lock ensures only one
+# request is in-flight at a time. A ContextVar keeps nested decorated calls
+# re-entrant within the same task.
+_zotero_api_lock = asyncio.Lock()
+_zotero_api_lock_depth: contextvars.ContextVar[int] = contextvars.ContextVar("zotero_api_lock_depth", default=0)
 
 
 def with_zotero_api_lock(func):
-    """Serialize Zotero API access across concurrent MCP tool threads."""
+    """Serialize Zotero API access across concurrent MCP tool tasks."""
+
+    if inspect.iscoroutinefunction(func):
+
+        @functools.wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            depth = _zotero_api_lock_depth.get()
+            if depth > 0:
+                token = _zotero_api_lock_depth.set(depth + 1)
+                try:
+                    return await func(*args, **kwargs)
+                finally:
+                    _zotero_api_lock_depth.reset(token)
+
+            async with _zotero_api_lock:
+                token = _zotero_api_lock_depth.set(1)
+                try:
+                    return await func(*args, **kwargs)
+                finally:
+                    _zotero_api_lock_depth.reset(token)
+
+        return async_wrapper
 
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
-        with _zotero_api_lock:
-            return func(*args, **kwargs)
+        return func(*args, **kwargs)
 
     return wrapper
+
+
+async def run_blocking(func, /, *args, **kwargs) -> Any:
+    """Run blocking pyzotero, requests, or filesystem work off the event loop."""
+    return await asyncio.to_thread(func, *args, **kwargs)
 
 
 # Runtime library override state — set by zotero_switch_library tool.
@@ -74,7 +101,7 @@ class AttachmentDetails:
     content_type: str
 
 
-def get_zotero_client() -> zotero.Zotero:
+def get_zotero_client() -> Any:
     """
     Get authenticated Zotero client using environment variables.
 
@@ -155,7 +182,7 @@ def get_local_zotero_client() -> zotero.Zotero | None:
         return None
 
 
-def get_web_zotero_client() -> zotero.Zotero | None:
+def get_web_zotero_client() -> Any | None:
     """
     Get a web API Zotero client for write operations.
 

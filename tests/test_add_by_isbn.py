@@ -5,6 +5,7 @@ Open Library → Google Books lookup cascade, and the resulting Zotero book
 item shape.
 """
 
+import pytest
 import requests
 from conftest import DummyContext, FakeZotero
 
@@ -115,7 +116,8 @@ GB_PAYLOAD = {
 
 
 class TestOpenLibraryLookup:
-    def test_hit_returns_normalized_dict(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_hit_returns_normalized_dict(self, monkeypatch):
         monkeypatch.setattr(
             _write,
             "requests",
@@ -132,7 +134,7 @@ class TestOpenLibraryLookup:
                 },
             ),
         )
-        meta = _write._lookup_isbn_openlibrary("9780199735815", DummyContext())
+        meta = await _write._lookup_isbn_openlibrary("9780199735815", DummyContext())
         assert meta is not None
         assert meta["source"] == "Open Library"
         assert "Oxford Handbook" in meta["title"]
@@ -141,7 +143,8 @@ class TestOpenLibraryLookup:
         assert meta["publisher"] == "Oxford University Press"
         assert meta["place"] == "Oxford"
 
-    def test_miss_returns_none(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_miss_returns_none(self, monkeypatch):
         monkeypatch.setattr(
             _write,
             "requests",
@@ -158,11 +161,12 @@ class TestOpenLibraryLookup:
                 },
             ),
         )
-        assert _write._lookup_isbn_openlibrary("9999999999999", DummyContext()) is None
+        assert await _write._lookup_isbn_openlibrary("9999999999999", DummyContext()) is None
 
 
 class TestGoogleBooksLookup:
-    def test_hit_returns_normalized_dict(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_hit_returns_normalized_dict(self, monkeypatch):
         monkeypatch.setattr(
             _write,
             "requests",
@@ -179,14 +183,15 @@ class TestGoogleBooksLookup:
                 },
             ),
         )
-        meta = _write._lookup_isbn_google_books("9780000000000", DummyContext())
+        meta = await _write._lookup_isbn_google_books("9780000000000", DummyContext())
         assert meta is not None
         assert meta["source"] == "Google Books"
         assert "Some Rare Book: A Subtitle" == meta["title"]
         assert meta["publisher"] == "Academic Press"
         assert meta["place"] == ""  # Google Books doesn't expose place
 
-    def test_no_items_returns_none(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_no_items_returns_none(self, monkeypatch):
         monkeypatch.setattr(
             _write,
             "requests",
@@ -203,7 +208,7 @@ class TestGoogleBooksLookup:
                 },
             ),
         )
-        assert _write._lookup_isbn_google_books("9999999999999", DummyContext()) is None
+        assert await _write._lookup_isbn_google_books("9999999999999", DummyContext()) is None
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +217,8 @@ class TestGoogleBooksLookup:
 
 
 class TestAddByIsbnEndToEnd:
-    def test_open_library_hit_creates_book(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_open_library_hit_creates_book(self, monkeypatch):
         fake = FakeZotero()
         monkeypatch.setattr(
             "zotero_mcp.tools._helpers._get_write_client",
@@ -235,7 +241,7 @@ class TestAddByIsbnEndToEnd:
             ),
         )
 
-        result = server.add_by_isbn(
+        result = await server.add_by_isbn(
             isbn="978-0-19-973581-5",
             ctx=DummyContext(),
         )
@@ -252,7 +258,8 @@ class TestAddByIsbnEndToEnd:
         assert created["publisher"] == "Oxford University Press"
         assert created["place"] == "Oxford"
 
-    def test_falls_back_to_google_books_on_open_library_miss(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_falls_back_to_google_books_on_open_library_miss(self, monkeypatch):
         fake = FakeZotero()
         monkeypatch.setattr(
             "zotero_mcp.tools._helpers._get_write_client",
@@ -276,7 +283,7 @@ class TestAddByIsbnEndToEnd:
             ),
         )
 
-        result = server.add_by_isbn(
+        result = await server.add_by_isbn(
             isbn="9780135957059",
             ctx=DummyContext(),
         )
@@ -284,7 +291,8 @@ class TestAddByIsbnEndToEnd:
         assert "Successfully added" in result
         assert "Google Books" in result
 
-    def test_both_sources_miss_returns_clear_error(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_both_sources_miss_returns_clear_error(self, monkeypatch):
         fake = FakeZotero()
         monkeypatch.setattr(
             "zotero_mcp.tools._helpers._get_write_client",
@@ -308,7 +316,7 @@ class TestAddByIsbnEndToEnd:
             ),
         )
 
-        result = server.add_by_isbn(
+        result = await server.add_by_isbn(
             isbn="9780135957059",
             ctx=DummyContext(),
         )
@@ -316,14 +324,15 @@ class TestAddByIsbnEndToEnd:
         assert "not found" in result.lower()
         assert len(fake.created) == 0
 
-    def test_invalid_isbn_rejected(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_invalid_isbn_rejected(self, monkeypatch):
         fake = FakeZotero()
         monkeypatch.setattr(
             "zotero_mcp.tools._helpers._get_write_client",
             lambda ctx: (fake, fake),
         )
 
-        result = server.add_by_isbn(
+        result = await server.add_by_isbn(
             isbn="not-an-isbn",
             ctx=DummyContext(),
         )
@@ -331,7 +340,8 @@ class TestAddByIsbnEndToEnd:
         assert "not appear to be a valid ISBN" in result
         assert len(fake.created) == 0
 
-    def test_tags_and_collections_applied(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_tags_and_collections_applied(self, monkeypatch):
         fake = FakeZotero()
         monkeypatch.setattr(
             "zotero_mcp.tools._helpers._get_write_client",
@@ -354,7 +364,7 @@ class TestAddByIsbnEndToEnd:
             ),
         )
 
-        server.add_by_isbn(
+        await server.add_by_isbn(
             isbn="9780199735815",
             tags=["philosophy", "anthology"],
             collections=["COLL0001"],

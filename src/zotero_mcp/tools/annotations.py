@@ -1,9 +1,11 @@
 """Annotation and note tool functions for the Zotero MCP server."""
 
+import asyncio
 import json
 import os
 import tempfile
 import uuid
+from typing import Any
 
 import requests
 
@@ -22,7 +24,7 @@ _WEB_API_ENV_VARS = (
 )
 
 
-def _get_note_write_client(op_description: str):
+def _get_note_write_client(op_description: str) -> tuple[Any, str | None]:
     """Return (client, None) or (None, error_msg) for note-write operations.
 
     Zotero's local API is read-only, so in local mode this falls back to the
@@ -49,7 +51,7 @@ def _get_note_write_client(op_description: str):
     description="Get all annotations for a specific item or across your entire Zotero library. When called without item_key, returns ALL annotations library-wide — this can be very large. Always pass item_key when you know which item you want.",
 )
 @with_zotero_api_lock
-def get_annotations(
+async def get_annotations(
     item_key: str | None = None, use_pdf_extraction: bool = False, limit: int | str | None = None, *, ctx: Context
 ) -> str:
     """
@@ -76,9 +78,9 @@ def get_annotations(
         if item_key:
             # First, verify the item exists and get its details
             try:
-                parent = zot.item(item_key)
+                parent = await asyncio.to_thread(zot.item, item_key)
                 parent_title = parent["data"].get("title", "Untitled Item")
-                ctx.info(f"Fetching annotations for item: {parent_title}")
+                await ctx.info(f"Fetching annotations for item: {parent_title}")
             except Exception:
                 return f"Error: No item found with key: {item_key}"
 
@@ -127,7 +129,7 @@ def get_annotations(
                                     citation_key = line.replace("citationkey:", "").strip()
                                     break
                         except Exception as e:
-                            ctx.warning(f"Error extracting citation key from Extra field: {e}")
+                            await ctx.warning(f"Error extracting citation key from Extra field: {e}")
 
                         # Fallback to searching by title if no citation key found
                         if not citation_key:
@@ -139,14 +141,14 @@ def get_annotations(
 
                                     # Find the matching item
                                     for result in search_results:
-                                        ctx.info(f"Checking result: {result}")
+                                        await ctx.info(f"Checking result: {result}")
 
                                         # Try to match with item key if possible
                                         if result.get("citekey"):
                                             citation_key = result["citekey"]
                                             break
                             except Exception as e:
-                                ctx.warning(f"Error searching for citation key: {e}")
+                                await ctx.warning(f"Error searching for citation key: {e}")
 
                         # Process annotations if citation key found
                         if citation_key:
@@ -191,11 +193,13 @@ def get_annotations(
                                             }
                                             better_bibtex_annotations.append(bibtex_anno)
 
-                                ctx.info(f"Retrieved {len(better_bibtex_annotations)} annotations via Better BibTeX")
+                                await ctx.info(
+                                    f"Retrieved {len(better_bibtex_annotations)} annotations via Better BibTeX"
+                                )
                             except Exception as e:
-                                ctx.warning(f"Error processing Better BibTeX annotations: {e}")
+                                await ctx.warning(f"Error processing Better BibTeX annotations: {e}")
                 except Exception as bibtex_error:
-                    ctx.warning(f"Error initializing Better BibTeX: {bibtex_error}")
+                    await ctx.warning(f"Error initializing Better BibTeX: {bibtex_error}")
 
             # Fallback to Zotero API annotations.
             #
@@ -229,9 +233,9 @@ def get_annotations(
                                 if k and k not in seen:
                                     seen.add(k)
                                     zotero_api_annotations.append(a)
-                    ctx.info(f"Retrieved {len(zotero_api_annotations)} annotations via Zotero API")
+                    await ctx.info(f"Retrieved {len(zotero_api_annotations)} annotations via Zotero API")
                 except Exception as api_error:
-                    ctx.warning(f"Error retrieving Zotero API annotations: {api_error}")
+                    await ctx.warning(f"Error retrieving Zotero API annotations: {api_error}")
 
             # PDF Extraction fallback
             if use_pdf_extraction and not (better_bibtex_annotations or zotero_api_annotations):
@@ -241,7 +245,7 @@ def get_annotations(
                     # Ensure PDF annotation tool is installed
                     if ensure_pdfannots_installed():
                         # Get PDF attachments via the resolved parent key
-                        children = zot.children(parent_item_key)
+                        children = await asyncio.to_thread(zot.children, parent_item_key)
                         pdf_attachments = [
                             item for item in children if item.get("data", {}).get("contentType") == "application/pdf"
                         ]
@@ -283,16 +287,15 @@ def get_annotations(
                                         }
 
                                         # Handle image annotations
-                                        if ext.get("type") == "image" and ext.get("imageRelativePath"):
-                                            pdf_anno["data"]["_image_path"] = os.path.join(
-                                                tmpdir, ext.get("imageRelativePath")
-                                            )
+                                        image_relative_path = ext.get("imageRelativePath")
+                                        if ext.get("type") == "image" and isinstance(image_relative_path, str):
+                                            pdf_anno["data"]["_image_path"] = os.path.join(tmpdir, image_relative_path)
 
                                         pdf_annotations.append(pdf_anno)
 
-                        ctx.info(f"Retrieved {len(pdf_annotations)} annotations via PDF extraction")
+                        await ctx.info(f"Retrieved {len(pdf_annotations)} annotations via PDF extraction")
                 except Exception as pdf_error:
-                    ctx.warning(f"Error during PDF annotation extraction: {pdf_error}")
+                    await ctx.warning(f"Error during PDF annotation extraction: {pdf_error}")
 
             # Combine annotations from all sources
             annotations = better_bibtex_annotations + zotero_api_annotations + pdf_annotations
@@ -316,7 +319,7 @@ def get_annotations(
                 if pk:
                     parent_keys.add(pk)
             if parent_keys:
-                parent_titles = _batch_resolve_grandparent_titles(zot, parent_keys, ctx)
+                parent_titles = await _batch_resolve_grandparent_titles(zot, parent_keys, ctx)
 
         # Generate markdown output
         output = [f"# Annotations{f' for: {parent_title}' if item_key else ''}", ""]
@@ -408,7 +411,7 @@ def get_annotations(
         return result
 
     except Exception as e:
-        ctx.error(f"Error fetching annotations: {str(e)}")
+        await ctx.error(f"Error fetching annotations: {str(e)}")
         return f"Error fetching annotations: {str(e)}"
 
 
@@ -421,7 +424,7 @@ _get_annotations = get_annotations
     description="Retrieve notes from your Zotero library, with options to filter by parent item. Set raw_html=True to return the note's original HTML (e.g., for round-tripping through zotero_update_note).",
 )
 @with_zotero_api_lock
-def get_notes(
+async def get_notes(
     item_key: str | None = None,
     limit: int | str | None = 20,
     truncate: bool = True,
@@ -444,7 +447,7 @@ def get_notes(
         Markdown-formatted list of notes
     """
     try:
-        ctx.info(f"Fetching notes{f' for item {item_key}' if item_key else ''}")
+        await ctx.info(f"Fetching notes{f' for item {item_key}' if item_key else ''}")
         zot = _client.get_zotero_client()
 
         # Prepare search parameters
@@ -470,7 +473,7 @@ def get_notes(
             if pk:
                 note_parent_keys.add(pk)
         if note_parent_keys:
-            note_parent_titles = _batch_resolve_parent_titles(zot, note_parent_keys, ctx)
+            note_parent_titles = await _batch_resolve_parent_titles(zot, note_parent_keys, ctx)
 
         # Generate markdown output
         output = [f"# Notes{f' for Item: {item_key}' if item_key else ''}", ""]
@@ -511,7 +514,7 @@ def get_notes(
         return "\n".join(output)
 
     except Exception as e:
-        ctx.error(f"Error fetching notes: {str(e)}")
+        await ctx.error(f"Error fetching notes: {str(e)}")
         return f"Error fetching notes: {str(e)}"
 
 
@@ -521,7 +524,7 @@ def get_notes(
 
 
 @with_zotero_api_lock
-def _batch_resolve_parent_titles(zot, parent_keys: set[str], ctx: Context) -> dict[str, str]:
+async def _batch_resolve_parent_titles(zot, parent_keys: set[str], ctx: Context) -> dict[str, str]:
     """Fetch parent item titles in batch instead of one-by-one (N+1 fix)."""
     titles: dict[str, str] = {}
     keys_list = list(parent_keys)
@@ -529,11 +532,11 @@ def _batch_resolve_parent_titles(zot, parent_keys: set[str], ctx: Context) -> di
     for i in range(0, len(keys_list), BATCH_SIZE):
         batch = keys_list[i : i + BATCH_SIZE]
         try:
-            items = zot.items(itemKey=",".join(batch))
+            items = await asyncio.to_thread(zot.items, itemKey=",".join(batch))
             for item in items:
                 titles[item.get("key", "")] = item.get("data", {}).get("title", "Untitled")
         except Exception as e:
-            ctx.warning(f"Batch parent lookup failed: {e}")
+            await ctx.warning(f"Batch parent lookup failed: {e}")
             for k in batch:
                 titles.setdefault(k, f"(parent key: {k})")
 
@@ -541,7 +544,7 @@ def _batch_resolve_parent_titles(zot, parent_keys: set[str], ctx: Context) -> di
     missing = [k for k in parent_keys if k not in titles]
     for key in missing:
         try:
-            item = zot.item(key)
+            item = await asyncio.to_thread(zot.item, key)
             if item:
                 titles[key] = item.get("data", {}).get("title", "Untitled")
         except Exception:
@@ -551,7 +554,7 @@ def _batch_resolve_parent_titles(zot, parent_keys: set[str], ctx: Context) -> di
 
 
 @with_zotero_api_lock
-def _batch_resolve_grandparent_titles(zot, parent_keys: set[str], ctx: Context) -> dict[str, str]:
+async def _batch_resolve_grandparent_titles(zot, parent_keys: set[str], ctx: Context) -> dict[str, str]:
     """Resolve annotation parent keys to their grandparent (paper) titles.
 
     Annotations are children of PDF attachments, which are children of papers.
@@ -568,7 +571,7 @@ def _batch_resolve_grandparent_titles(zot, parent_keys: set[str], ctx: Context) 
     for i in range(0, len(keys_list), BATCH_SIZE):
         batch = keys_list[i : i + BATCH_SIZE]
         try:
-            items = zot.items(itemKey=",".join(batch))
+            items = await asyncio.to_thread(zot.items, itemKey=",".join(batch))
             for item in items:
                 key = item.get("key", "")
                 attachment_data[key] = item
@@ -576,13 +579,13 @@ def _batch_resolve_grandparent_titles(zot, parent_keys: set[str], ctx: Context) 
                 if gp_key and item.get("data", {}).get("itemType") == "attachment":
                     grandparent_keys.add(gp_key)
         except Exception as e:
-            ctx.info(f"Batch attachment lookup failed: {e}")
+            await ctx.info(f"Batch attachment lookup failed: {e}")
 
     # Step 1b: Individual fallback for attachment keys the batch missed
     missing_attachments = [k for k in parent_keys if k not in attachment_data]
     for key in missing_attachments:
         try:
-            item = zot.item(key)
+            item = await asyncio.to_thread(zot.item, key)
             if item:
                 attachment_data[key] = item
                 gp_key = item.get("data", {}).get("parentItem")
@@ -597,17 +600,17 @@ def _batch_resolve_grandparent_titles(zot, parent_keys: set[str], ctx: Context) 
     for i in range(0, len(gp_list), BATCH_SIZE):
         batch = gp_list[i : i + BATCH_SIZE]
         try:
-            items = zot.items(itemKey=",".join(batch))
+            items = await asyncio.to_thread(zot.items, itemKey=",".join(batch))
             for item in items:
                 grandparent_titles[item.get("key", "")] = item.get("data", {}).get("title", "Untitled")
         except Exception as e:
-            ctx.info(f"Batch grandparent lookup failed: {e}")
+            await ctx.info(f"Batch grandparent lookup failed: {e}")
 
     # Step 2b: Individual fallback for grandparent keys the batch missed
     missing_gp = [k for k in grandparent_keys if k not in grandparent_titles]
     for key in missing_gp:
         try:
-            item = zot.item(key)
+            item = await asyncio.to_thread(zot.item, key)
             if item:
                 grandparent_titles[key] = item.get("data", {}).get("title", "Untitled")
         except Exception:
@@ -693,7 +696,7 @@ def _format_search_results(
     description="Search for notes and annotations across your Zotero library. Set raw_html=True to return note matches as raw HTML (useful for round-tripping through zotero_update_note).",
 )
 @with_zotero_api_lock
-def search_notes(query: str, limit: int | str | None = 20, raw_html: bool = False, *, ctx: Context) -> str:
+async def search_notes(query: str, limit: int | str | None = 20, raw_html: bool = False, *, ctx: Context) -> str:
     """
     Search for notes and annotations in your Zotero library.
 
@@ -710,7 +713,7 @@ def search_notes(query: str, limit: int | str | None = 20, raw_html: bool = Fals
     if not query or not query.strip():
         return "Error: Search query cannot be empty"
 
-    ctx.info(f"Searching Zotero notes for '{query}'")
+    await ctx.info(f"Searching Zotero notes for '{query}'")
 
     limit = _helpers._normalize_limit(limit, default=20)
 
@@ -726,33 +729,33 @@ def search_notes(query: str, limit: int | str | None = 20, raw_html: bool = Fals
             if reader:
                 try:
                     note_results = reader.search_notes_local(query, limit)
-                    ctx.info(f"Local note search: {len(note_results)} results")
+                    await ctx.info(f"Local note search: {len(note_results)} results")
                 except Exception as e:
-                    ctx.warning(f"Local note search failed: {e}")
+                    await ctx.warning(f"Local note search failed: {e}")
 
                 try:
                     annotation_results = reader.search_annotations_local(query, limit)
-                    ctx.info(f"Local annotation search: {len(annotation_results)} results")
+                    await ctx.info(f"Local annotation search: {len(annotation_results)} results")
                 except Exception as e:
-                    ctx.warning(f"Local annotation search failed: {e}")
+                    await ctx.warning(f"Local annotation search failed: {e}")
                 finally:
                     reader.close()
 
                 return _format_search_results(query, note_results, annotation_results, raw_html=raw_html)
         except Exception as e:
-            ctx.warning(f"Local search unavailable, falling back to API: {e}")
+            await ctx.warning(f"Local search unavailable, falling back to API: {e}")
 
     # ---------- API mode: separate try/except blocks ----------
-    zot = _client.get_zotero_client()
+    zot = await asyncio.to_thread(_client.get_zotero_client)
 
     # Notes — always try (this works since upstream PR #136)
     try:
         zot.add_parameters(q=query, qmode="everything", itemType="note", limit=limit)
-        notes = zot.items()
+        notes = await asyncio.to_thread(zot.items)
 
         # Batch-resolve parent titles
         parent_keys = {n.get("data", {}).get("parentItem") for n in notes if n.get("data", {}).get("parentItem")}
-        parent_titles = _batch_resolve_parent_titles(zot, parent_keys, ctx) if parent_keys else {}
+        parent_titles = await _batch_resolve_parent_titles(zot, parent_keys, ctx) if parent_keys else {}
 
         query_lower = query.lower()
         for note in notes:
@@ -774,9 +777,9 @@ def search_notes(query: str, limit: int | str | None = 20, raw_html: bool = Fals
                     "parent_title": parent_titles.get(parent_key) if parent_key else None,
                 }
             )
-        ctx.info(f"API note search: {len(note_results)} results")
+        await ctx.info(f"API note search: {len(note_results)} results")
     except Exception as e:
-        ctx.warning(f"Note search failed: {e}")
+        await ctx.warning(f"Note search failed: {e}")
 
     # Annotations — separate block so note results survive if this crashes
     try:
@@ -789,7 +792,9 @@ def search_notes(query: str, limit: int | str | None = 20, raw_html: bool = Fals
             pk = anno.get("data", {}).get("parentItem")
             if pk:
                 anno_parent_keys.add(pk)
-        anno_parent_titles = _batch_resolve_grandparent_titles(zot, anno_parent_keys, ctx) if anno_parent_keys else {}
+        anno_parent_titles = (
+            await _batch_resolve_grandparent_titles(zot, anno_parent_keys, ctx) if anno_parent_keys else {}
+        )
 
         query_lower = query.lower()
         for anno in annotations:
@@ -812,9 +817,9 @@ def search_notes(query: str, limit: int | str | None = 20, raw_html: bool = Fals
                     "parent_title": anno_parent_titles.get(parent_key) if parent_key else None,
                 }
             )
-        ctx.info(f"API annotation search: {len(annotation_results)} results")
+        await ctx.info(f"API annotation search: {len(annotation_results)} results")
     except Exception as e:
-        ctx.warning(f"Annotation search failed: {e}")
+        await ctx.warning(f"Annotation search failed: {e}")
 
     return _format_search_results(query, note_results, annotation_results, raw_html=raw_html)
 
@@ -828,7 +833,7 @@ def search_notes(query: str, limit: int | str | None = 20, raw_html: bool = Fals
     ),
 )
 @with_zotero_api_lock
-def create_note(
+async def create_note(
     item_key: str, note_title: str, note_text: str, tags: list[str] | str | None = None, *, ctx: Context
 ) -> str:
     """
@@ -845,14 +850,14 @@ def create_note(
         Confirmation message with the new note key
     """
     try:
-        ctx.info(f"Creating note for item {item_key}")
+        await ctx.info(f"Creating note for item {item_key}")
         # Normalize tags (LLMs often pass JSON strings instead of lists)
         tags = _helpers._normalize_str_list_input(tags, "tags") if tags is not None else []
         zot = _client.get_zotero_client()
 
         # First verify the parent item exists
         try:
-            parent = zot.item(item_key)
+            parent = await asyncio.to_thread(zot.item, item_key)
             parent_title = parent["data"].get("title", "Untitled Item")
         except Exception:
             return f"Error: No item found with key: {item_key}"
@@ -939,7 +944,7 @@ def create_note(
                     return f"Failed to create note via local connector (HTTP {resp.status_code}): {resp.text}"
         else:
             # Remote API: use pyzotero's create_items
-            result = zot.create_items([note_data])
+            result = await asyncio.to_thread(zot.create_items, [note_data])
 
             # Check if creation was successful
             if "success" in result and result["success"]:
@@ -953,7 +958,7 @@ def create_note(
                 return f"Failed to create note: {result.get('failed', 'Unknown error')}"
 
     except Exception as e:
-        ctx.error(f"Error creating note: {str(e)}")
+        await ctx.error(f"Error creating note: {str(e)}")
         return f"Error creating note: {str(e)}"
 
 
@@ -961,7 +966,7 @@ def create_note(
     name="zotero_update_note",
     description="Update the HTML content of an existing Zotero note. Set append=True to concatenate to the existing note; otherwise the note is replaced.",
 )
-def update_note(item_key: str, note_text: str, append: bool = False, *, ctx: Context) -> str:
+async def update_note(item_key: str, note_text: str, append: bool = False, *, ctx: Context) -> str:
     """
     Update an existing Zotero note.
 
@@ -976,14 +981,14 @@ def update_note(item_key: str, note_text: str, append: bool = False, *, ctx: Con
         Confirmation message
     """
     try:
-        ctx.info(f"Updating note {item_key} (append={append})")
+        await ctx.info(f"Updating note {item_key} (append={append})")
 
         zot, err = _get_note_write_client("updating notes")
         if err:
             return err
 
         try:
-            item = zot.item(item_key)
+            item = await asyncio.to_thread(zot.item, item_key)
         except Exception:
             return f"Error: No item found with key: {item_key}"
 
@@ -996,13 +1001,13 @@ def update_note(item_key: str, note_text: str, append: bool = False, *, ctx: Con
         else:
             data["note"] = note_text
 
-        resp = zot.update_item(item)
-        if _helpers._handle_write_response(resp, ctx):
+        resp = await asyncio.to_thread(zot.update_item, item)
+        if await _helpers._handle_write_response(resp, ctx):
             return f"Successfully updated note {item_key}"
         return f"Failed to update note {item_key}"
 
     except Exception as e:
-        ctx.error(f"Error updating note: {str(e)}")
+        await ctx.error(f"Error updating note: {str(e)}")
         return f"Error updating note: {str(e)}"
 
 
@@ -1010,7 +1015,7 @@ def update_note(item_key: str, note_text: str, append: bool = False, *, ctx: Con
     name="zotero_delete_note",
     description="Move a Zotero note to the Trash. Trashed notes are recoverable from Zotero's Trash — empty the Trash in the Zotero UI for permanent deletion.",
 )
-def delete_note(item_key: str, *, ctx: Context) -> str:
+async def delete_note(item_key: str, *, ctx: Context) -> str:
     """
     Move a Zotero note to the Trash.
 
@@ -1022,14 +1027,14 @@ def delete_note(item_key: str, *, ctx: Context) -> str:
         Confirmation message
     """
     try:
-        ctx.info(f"Trashing note {item_key}")
+        await ctx.info(f"Trashing note {item_key}")
 
         zot, err = _get_note_write_client("deleting notes")
         if err:
             return err
 
         try:
-            item = zot.item(item_key)
+            item = await asyncio.to_thread(zot.item, item_key)
         except Exception:
             return f"Error: No item found with key: {item_key}"
 
@@ -1057,7 +1062,7 @@ def delete_note(item_key: str, *, ctx: Context) -> str:
         return f"Failed to trash note {item_key} (HTTP {resp.status_code}): {resp.text[:200]}"
 
     except Exception as e:
-        ctx.error(f"Error trashing note: {str(e)}")
+        await ctx.error(f"Error trashing note: {str(e)}")
         return f"Error trashing note: {str(e)}"
 
 
@@ -1073,7 +1078,7 @@ def delete_note(item_key: str, *, ctx: Context) -> str:
     ),
 )
 @with_zotero_api_lock
-def create_annotation(
+async def create_annotation(
     attachment_key: str, page: int, text: str, comment: str | None = None, color: str = "#ffd400", *, ctx: Context
 ) -> str:
     """
@@ -1104,7 +1109,7 @@ def create_annotation(
     )
 
     try:
-        ctx.info(f"Creating annotation on attachment {attachment_key}, page {page}")
+        await ctx.info(f"Creating annotation on attachment {attachment_key}, page {page}")
 
         # Get clients for different operations
         local_client = _client.get_local_zotero_client()
@@ -1156,7 +1161,7 @@ def create_annotation(
         # Strategy: Try multiple sources in order of likelihood to succeed
         with tempfile.TemporaryDirectory() as tmpdir:
             file_path = os.path.join(tmpdir, filename)
-            ctx.info(f"Downloading PDF to {file_path}")
+            await ctx.info(f"Downloading PDF to {file_path}")
 
             download_errors = []
             downloaded = False
@@ -1164,22 +1169,22 @@ def create_annotation(
             # Source 1: Try local Zotero first (works for WebDAV and local storage)
             if local_client and not downloaded:
                 try:
-                    ctx.info("Trying local Zotero (WebDAV/local storage)...")
+                    await ctx.info("Trying local Zotero (WebDAV/local storage)...")
                     local_client.dump(attachment_key, filename=filename, path=tmpdir)
                     if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
                         downloaded = True
-                        ctx.info("PDF downloaded via local Zotero")
+                        await ctx.info("PDF downloaded via local Zotero")
                 except Exception as e:
                     download_errors.append(f"Local Zotero: {e}")
 
             # Source 2: Try Web API (works for Zotero Cloud Storage)
             if not downloaded:
                 try:
-                    ctx.info("Trying Zotero Web API (cloud storage)...")
+                    await ctx.info("Trying Zotero Web API (cloud storage)...")
                     web_client.dump(attachment_key, filename=filename, path=tmpdir)
                     if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
                         downloaded = True
-                        ctx.info("PDF downloaded via Web API")
+                        await ctx.info("PDF downloaded via Web API")
                 except Exception as e:
                     download_errors.append(f"Web API: {e}")
 
@@ -1208,7 +1213,7 @@ def create_annotation(
             # Search for the text and get position data
             search_preview = text[:50] + "..." if len(text) > 50 else text
             location_type = "page" if file_type == "pdf" else "chapter"
-            ctx.info(f"Searching for text in {location_type} {page}: '{search_preview}'")
+            await ctx.info(f"Searching for text in {location_type} {page}: '{search_preview}'")
 
             if file_type == "pdf":
                 position_data = find_text_position(file_path, page, text)
@@ -1309,7 +1314,7 @@ def create_annotation(
             if page_label:
                 annotation_data["annotationPageLabel"] = page_label
 
-            ctx.info("Creating annotation via Web API...")
+            await ctx.info("Creating annotation via Web API...")
 
             # Create the annotation using web client
             result = web_client.create_items([annotation_data])
@@ -1348,7 +1353,7 @@ def create_annotation(
                 return f"Failed to create annotation: {failed_info}"
 
     except Exception as e:
-        ctx.error(f"Error creating annotation: {str(e)}")
+        await ctx.error(f"Error creating annotation: {str(e)}")
         return f"Error creating annotation: {str(e)}"
 
 
@@ -1356,7 +1361,7 @@ def create_annotation(
     name="zotero_create_area_annotation",
     description="Create a PDF area/image annotation using normalized page coordinates.",
 )
-def create_area_annotation(
+async def create_area_annotation(
     attachment_key: str,
     page: int,
     x: float,
@@ -1395,7 +1400,7 @@ def create_area_annotation(
     )
 
     try:
-        ctx.info(f"Creating area annotation on attachment {attachment_key}, page {page}")
+        await ctx.info(f"Creating area annotation on attachment {attachment_key}, page {page}")
 
         values = {"x": x, "y": y, "width": width, "height": height}
         for name, value in values.items():
@@ -1451,28 +1456,28 @@ def create_area_annotation(
 
         with tempfile.TemporaryDirectory() as tmpdir:
             file_path = os.path.join(tmpdir, filename)
-            ctx.info(f"Downloading PDF to {file_path}")
+            await ctx.info(f"Downloading PDF to {file_path}")
 
             download_errors = []
             downloaded = False
 
             if local_client and not downloaded:
                 try:
-                    ctx.info("Trying local Zotero (WebDAV/local storage)...")
+                    await ctx.info("Trying local Zotero (WebDAV/local storage)...")
                     local_client.dump(attachment_key, filename=filename, path=tmpdir)
                     if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
                         downloaded = True
-                        ctx.info("PDF downloaded via local Zotero")
+                        await ctx.info("PDF downloaded via local Zotero")
                 except Exception as e:
                     download_errors.append(f"Local Zotero: {e}")
 
             if not downloaded:
                 try:
-                    ctx.info("Trying Zotero Web API (cloud storage)...")
+                    await ctx.info("Trying Zotero Web API (cloud storage)...")
                     web_client.dump(attachment_key, filename=filename, path=tmpdir)
                     if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
                         downloaded = True
-                        ctx.info("PDF downloaded via Web API")
+                        await ctx.info("PDF downloaded via Web API")
                 except Exception as e:
                     download_errors.append(f"Web API: {e}")
 
@@ -1512,7 +1517,7 @@ def create_area_annotation(
                 "annotationPageLabel": page_label,
             }
 
-            ctx.info("Creating area annotation via Web API...")
+            await ctx.info("Creating area annotation via Web API...")
             result = web_client.create_items([annotation_data])
 
             if "success" in result and result["success"]:
@@ -1536,5 +1541,5 @@ def create_area_annotation(
             return f"Failed to create annotation: {failed_info}"
 
     except Exception as e:
-        ctx.error(f"Error creating area annotation: {str(e)}")
+        await ctx.error(f"Error creating area annotation: {str(e)}")
         return f"Error creating area annotation: {str(e)}"

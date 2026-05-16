@@ -146,49 +146,55 @@ class TestNormalizeArxivId:
 
 
 class TestResolveCollectionNames:
-    def test_resolve_single_name(self):
+    @pytest.mark.asyncio
+    async def test_resolve_single_name(self):
         zot = FakeZotero()
         zot._collections = [
             {"key": "COL001", "data": {"name": "PhD Research"}},
             {"key": "COL002", "data": {"name": "Other"}},
         ]
-        result = server._resolve_collection_names(zot, ["PhD Research"])
+        result = await server._resolve_collection_names(zot, ["PhD Research"])
         assert result == ["COL001"]
 
-    def test_case_insensitive(self):
+    @pytest.mark.asyncio
+    async def test_case_insensitive(self):
         zot = FakeZotero()
         zot._collections = [{"key": "COL001", "data": {"name": "PhD Research"}}]
-        result = server._resolve_collection_names(zot, ["phd research"])
+        result = await server._resolve_collection_names(zot, ["phd research"])
         assert result == ["COL001"]
 
-    def test_multiple_names(self):
+    @pytest.mark.asyncio
+    async def test_multiple_names(self):
         zot = FakeZotero()
         zot._collections = [
             {"key": "COL001", "data": {"name": "A"}},
             {"key": "COL002", "data": {"name": "B"}},
         ]
-        result = server._resolve_collection_names(zot, ["A", "B"])
+        result = await server._resolve_collection_names(zot, ["A", "B"])
         assert result == ["COL001", "COL002"]
 
-    def test_no_match_raises(self):
+    @pytest.mark.asyncio
+    async def test_no_match_raises(self):
         zot = FakeZotero()
         zot._collections = [{"key": "COL001", "data": {"name": "Other"}}]
         with pytest.raises(ValueError, match="No collection found"):
-            server._resolve_collection_names(zot, ["Nonexistent"])
+            await server._resolve_collection_names(zot, ["Nonexistent"])
 
-    def test_duplicate_names_returns_all(self):
+    @pytest.mark.asyncio
+    async def test_duplicate_names_returns_all(self):
         zot = FakeZotero()
         zot._collections = [
             {"key": "COL001", "data": {"name": "Research"}},
             {"key": "COL002", "data": {"name": "Research"}},
         ]
         ctx = DummyContext()
-        result = server._resolve_collection_names(zot, ["Research"], ctx=ctx)
+        result = await server._resolve_collection_names(zot, ["Research"], ctx=ctx)
         assert set(result) == {"COL001", "COL002"}
 
-    def test_empty_list_returns_empty(self):
+    @pytest.mark.asyncio
+    async def test_empty_list_returns_empty(self):
         zot = FakeZotero()
-        assert server._resolve_collection_names(zot, []) == []
+        assert await server._resolve_collection_names(zot, []) == []
 
 
 # ---------------------------------------------------------------------------
@@ -258,40 +264,52 @@ class TestGetWriteClient:
 
 
 class TestHandleWriteResponse:
-    def test_httpx_200(self):
+    @pytest.mark.asyncio
+    async def test_httpx_200(self):
         from conftest import _FakeResponse
 
-        assert server._handle_write_response(_FakeResponse(200)) is True
+        assert await server._handle_write_response(_FakeResponse(200)) is True
 
-    def test_httpx_204(self):
+    @pytest.mark.asyncio
+    async def test_httpx_204(self):
         from conftest import _FakeResponse
 
-        assert server._handle_write_response(_FakeResponse(204)) is True
+        assert await server._handle_write_response(_FakeResponse(204)) is True
 
-    def test_httpx_412_fails(self):
+    @pytest.mark.asyncio
+    async def test_httpx_412_fails(self):
         from conftest import _FakeResponse
 
-        assert server._handle_write_response(_FakeResponse(412)) is False
+        assert await server._handle_write_response(_FakeResponse(412)) is False
 
-    def test_dict_with_success(self):
-        assert server._handle_write_response({"success": {"0": "KEY"}}) is True
+    @pytest.mark.asyncio
+    async def test_dict_with_success(self):
+        assert await server._handle_write_response({"success": {"0": "KEY"}}) is True
 
-    def test_dict_with_empty_success(self):
-        assert server._handle_write_response({"success": {}, "failed": {"0": "err"}}) is False
+    @pytest.mark.asyncio
+    async def test_dict_with_empty_success(self):
+        assert await server._handle_write_response({"success": {}, "failed": {"0": "err"}}) is False
 
-    def test_bool_true(self):
-        assert server._handle_write_response(True) is True
+    @pytest.mark.asyncio
+    async def test_bool_true(self):
+        assert await server._handle_write_response(True) is True
 
-    def test_bool_false(self):
-        assert server._handle_write_response(False) is False
+    @pytest.mark.asyncio
+    async def test_bool_false(self):
+        assert await server._handle_write_response(False) is False
 
-    def test_logs_error_on_failure(self):
+    @pytest.mark.asyncio
+    async def test_logs_error_on_failure(self):
         from conftest import _FakeResponse
 
         ctx = DummyContext()
         ctx.errors = []
-        ctx.error = lambda msg: ctx.errors.append(msg)
-        server._handle_write_response(_FakeResponse(412, "Precondition Failed"), ctx=ctx)
+
+        async def _capture_error(msg):
+            ctx.errors.append(msg)
+
+        ctx.error = _capture_error
+        await server._handle_write_response(_FakeResponse(412, "Precondition Failed"), ctx=ctx)
         assert len(ctx.errors) == 1
         assert "412" in ctx.errors[0]
 

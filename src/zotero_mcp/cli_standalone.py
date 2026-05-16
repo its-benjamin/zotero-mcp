@@ -520,17 +520,18 @@ def cmd_db(args):
             if common:
                 print("Common titles:")
                 for t, c in common:
-                    print(f"  {t[:80]}{'...' if len(t) > 80 else ''}: {c}")
+                    ts = str(t)
+                    print(f"  {ts[:80]}{'...' if len(ts) > 80 else ''}: {c}")
         else:
             include = ["metadatas"]
             if args.show_documents:
                 include.append("documents")
-            data = col.get(limit=args.limit, include=include)
+            data = col.get(limit=args.limit, include=include)  # type: ignore[arg-type]
             print("=== Semantic DB Inspection ===")
             print(f"Total documents: {client.get_collection_info().get('count', 0)}")
             print(f"Showing up to: {args.limit}")
             shown = 0
-            for i, meta in enumerate(data.get("metadatas", [])):
+            for i, meta in enumerate(data.get("metadatas") or []):
                 meta = meta or {}
                 title = meta.get("title", "")
                 creators = meta.get("creators", "")

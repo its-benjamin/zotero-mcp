@@ -7,6 +7,8 @@ which agents sometimes confuse with the filter shape). pyzotero's `tag=`
 parameter wants list[str] — the normalizer collapses all inputs to that.
 """
 
+import pytest
+
 from zotero_mcp.tools._helpers import _normalize_tag_filter
 
 
@@ -97,7 +99,8 @@ class TestSearchItemsIntegration:
             lambda: fake,
         )
 
-    def test_search_items_accepts_dict_shape_tag(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_search_items_accepts_dict_shape_tag(self, monkeypatch):
         """The exact failing call from the #237 bug report."""
         from conftest import DummyContext
 
@@ -106,7 +109,7 @@ class TestSearchItemsIntegration:
         fake = _SearchableFake()
         self._patch(monkeypatch, fake)
 
-        result = server.search_items(
+        result = await server.search_items(
             query="whatever",
             tag=[{"tag": "FIXME"}],
             ctx=DummyContext(),
@@ -116,7 +119,8 @@ class TestSearchItemsIntegration:
         # No pydantic explosion; search ran to a clean "no results"
         assert "FIXME" in result
 
-    def test_search_items_accepts_json_string_tag(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_search_items_accepts_json_string_tag(self, monkeypatch):
         """The stringified form the MCP serialization layer produces."""
         from conftest import DummyContext
 
@@ -125,7 +129,7 @@ class TestSearchItemsIntegration:
         fake = _SearchableFake()
         self._patch(monkeypatch, fake)
 
-        result = server.search_items(
+        result = await server.search_items(
             query="whatever",
             tag='[{"tag": "FIXME"}]',
             ctx=DummyContext(),
@@ -133,7 +137,8 @@ class TestSearchItemsIntegration:
         assert fake.last_params.get("tag") == ["FIXME"]
         assert "FIXME" in result
 
-    def test_search_items_accepts_canonical_list_of_strings(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_search_items_accepts_canonical_list_of_strings(self, monkeypatch):
         """Regression guard: canonical shape must still work."""
         from conftest import DummyContext
 
@@ -142,7 +147,7 @@ class TestSearchItemsIntegration:
         fake = _SearchableFake()
         self._patch(monkeypatch, fake)
 
-        result = server.search_items(
+        result = await server.search_items(
             query="whatever",
             tag=["a", "b"],
             ctx=DummyContext(),
@@ -150,7 +155,8 @@ class TestSearchItemsIntegration:
         assert fake.last_params.get("tag") == ["a", "b"]
         assert "a, b" in result
 
-    def test_search_items_no_tag(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_search_items_no_tag(self, monkeypatch):
         """Regression guard: tag omitted entirely should not pass tag= to API."""
         from conftest import DummyContext
 
@@ -159,5 +165,5 @@ class TestSearchItemsIntegration:
         fake = _SearchableFake()
         self._patch(monkeypatch, fake)
 
-        server.search_items(query="whatever", ctx=DummyContext())
+        await server.search_items(query="whatever", ctx=DummyContext())
         assert "tag" not in fake.last_params or not fake.last_params.get("tag")

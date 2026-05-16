@@ -5,6 +5,7 @@ Each test prevents a specific bug from reappearing.
 
 import json
 
+import pytest
 from conftest import DummyContext, FakeZotero, _FakeResponse
 
 from zotero_mcp import server
@@ -18,7 +19,8 @@ from zotero_mcp import server
 class TestManageCollectionsPayloadShape:
     """addto_collection receives a dict (not a list)."""
 
-    def test_addto_receives_dict_not_list(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_addto_receives_dict_not_list(self, monkeypatch):
         received = []
 
         class FakeZotManage(FakeZotero):
@@ -33,7 +35,7 @@ class TestManageCollectionsPayloadShape:
         monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
 
         ctx = DummyContext()
-        server.manage_collections(item_keys=["ITEM01"], add_to=["COL01"], ctx=ctx)
+        await server.manage_collections(item_keys=["ITEM01"], add_to=["COL01"], ctx=ctx)
 
         assert len(received) == 1
         # Must be a dict, NOT a list wrapping a dict
@@ -110,12 +112,13 @@ class TestMergeTrashMethod:
         monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
         return fake
 
-    def test_trash_uses_direct_patch_not_update_item(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_trash_uses_direct_patch_not_update_item(self, monkeypatch):
         """Trashing must use client.patch with deleted:1, NOT update_item."""
         fake = self._setup(monkeypatch)
         ctx = DummyContext()
 
-        server.merge_duplicates(keeper_key="KEEP", duplicate_keys=["DUP1"], confirm=True, ctx=ctx)
+        await server.merge_duplicates(keeper_key="KEEP", duplicate_keys=["DUP1"], confirm=True, ctx=ctx)
 
         # update_item should NOT have been called with any "deleted" field
         for call in fake.update_calls:
@@ -141,7 +144,8 @@ class TestMergeTrashMethod:
 class TestFindDuplicatesNoPicle:
     """find_duplicates does NOT call everything()."""
 
-    def test_everything_not_called(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_everything_not_called(self, monkeypatch):
         class FakeZotNoPickle(FakeZotero):
             def everything(self, *args, **kwargs):
                 raise RuntimeError("everything() should not be called — causes RLock pickle error")
@@ -157,7 +161,7 @@ class TestFindDuplicatesNoPicle:
 
         ctx = DummyContext()
         # Should complete without hitting everything()
-        result = server.find_duplicates(method="both", ctx=ctx)
+        result = await server.find_duplicates(method="both", ctx=ctx)
         assert "Error" not in result or "No duplicates" in result
 
 
@@ -170,7 +174,8 @@ class TestFindDuplicatesNoPicle:
 class TestPdfOutlineDownloadMethod:
     """PDF outline always uses zot.dump(), not direct file path access."""
 
-    def test_dump_called_not_direct_path(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_dump_called_not_direct_path(self, monkeypatch):
         import sys
         import types
 
@@ -216,7 +221,7 @@ class TestPdfOutlineDownloadMethod:
         monkeypatch.setitem(sys.modules, "fitz", fake_fitz)
 
         ctx = DummyContext()
-        result = server.get_pdf_outline(item_key="PARENT01", ctx=ctx)
+        result = await server.get_pdf_outline(item_key="PARENT01", ctx=ctx)
 
         assert len(dump_called) == 1, "dump() should be called even in local mode"
         assert "Intro" in result

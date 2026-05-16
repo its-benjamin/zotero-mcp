@@ -2,10 +2,11 @@
 
 from unittest.mock import MagicMock, patch
 
-from conftest import DummyContext, FakeZotero
-
 # The module reference that search.py uses for client calls.
 # Patching this directly avoids module-resolution issues across Python versions.
+import pytest
+from conftest import DummyContext, FakeZotero
+
 import zotero_mcp.tools.search as _search_mod
 from zotero_mcp.server import (
     _extra_has_citekey,
@@ -81,7 +82,8 @@ class _CitekeyFakeZotero(FakeZotero):
 class TestSearchByCitationKeyWebMode:
     """Tests where BBT is not available (non-local mode)."""
 
-    def test_found_via_extra_field(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_found_via_extra_field(self, monkeypatch):
         fake = _CitekeyFakeZotero()
         fake._items = [
             _make_item(key="ABC123", title="Deep Learning", citekey="Smith2024"),
@@ -89,13 +91,14 @@ class TestSearchByCitationKeyWebMode:
         monkeypatch.setattr(_search_mod._utils, "is_local_mode", lambda: False)
         monkeypatch.setattr(_search_mod._client, "get_zotero_client", lambda: fake)
 
-        result = search_by_citation_key("Smith2024", ctx=DummyContext())
+        result = await search_by_citation_key("Smith2024", ctx=DummyContext())
 
         assert "Citation Key: Smith2024" in result
         assert "Deep Learning" in result
         assert "ABC123" in result
 
-    def test_no_match(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_no_match(self, monkeypatch):
         fake = _CitekeyFakeZotero()
         fake._items = [
             _make_item(key="XYZ999", title="Other Paper", citekey="Jones2023"),
@@ -103,7 +106,7 @@ class TestSearchByCitationKeyWebMode:
         monkeypatch.setattr(_search_mod._utils, "is_local_mode", lambda: False)
         monkeypatch.setattr(_search_mod._client, "get_zotero_client", lambda: fake)
 
-        result = search_by_citation_key("Smith2024", ctx=DummyContext())
+        result = await search_by_citation_key("Smith2024", ctx=DummyContext())
 
         assert "No item found with citation key: 'Smith2024'" in result
 
@@ -116,7 +119,8 @@ class TestSearchByCitationKeyWebMode:
 class TestSearchByCitationKeyLocalMode:
     """Tests where BBT is available (local mode)."""
 
-    def test_bbt_lookup_succeeds(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_bbt_lookup_succeeds(self, monkeypatch):
         # BBT returns a matching result with itemKey
         bbt_instance = MagicMock()
         bbt_instance.is_zotero_running.return_value = True
@@ -136,12 +140,13 @@ class TestSearchByCitationKeyLocalMode:
             "zotero_mcp.better_bibtex_client.ZoteroBetterBibTexAPI",
             return_value=bbt_instance,
         ):
-            result = search_by_citation_key("Smith2024", ctx=DummyContext())
+            result = await search_by_citation_key("Smith2024", ctx=DummyContext())
 
         assert "Citation Key: Smith2024" in result
         assert "Deep Learning" in result
 
-    def test_bbt_fails_falls_back_to_extra(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_bbt_fails_falls_back_to_extra(self, monkeypatch):
         """When BBT raises an exception, Strategy B (Extra field) is used."""
         fake = _CitekeyFakeZotero()
         fake._items = [
@@ -157,7 +162,7 @@ class TestSearchByCitationKeyLocalMode:
             instance = MockBBT.return_value
             instance.is_zotero_running.side_effect = Exception("connection refused")
 
-            result = search_by_citation_key("Smith2024", ctx=DummyContext())
+            result = await search_by_citation_key("Smith2024", ctx=DummyContext())
 
         assert "Citation Key: Smith2024" in result
         assert "Fallback Paper" in result
@@ -170,11 +175,13 @@ class TestSearchByCitationKeyLocalMode:
 
 
 class TestSearchByCitationKeyEdgeCases:
-    def test_empty_citekey(self):
-        result = search_by_citation_key("  ", ctx=DummyContext())
+    @pytest.mark.asyncio
+    async def test_empty_citekey(self):
+        result = await search_by_citation_key("  ", ctx=DummyContext())
         assert "Error: Citation key cannot be empty" in result
 
-    def test_whitespace_stripped(self, monkeypatch):
+    @pytest.mark.asyncio
+    async def test_whitespace_stripped(self, monkeypatch):
         fake = _CitekeyFakeZotero()
         fake._items = [
             _make_item(key="ABC123", title="Stripped Key", citekey="Smith2024"),
@@ -182,7 +189,7 @@ class TestSearchByCitationKeyEdgeCases:
         monkeypatch.setattr(_search_mod._utils, "is_local_mode", lambda: False)
         monkeypatch.setattr(_search_mod._client, "get_zotero_client", lambda: fake)
 
-        result = search_by_citation_key("  Smith2024  ", ctx=DummyContext())
+        result = await search_by_citation_key("  Smith2024  ", ctx=DummyContext())
 
         assert "Citation Key: Smith2024" in result
         assert "Stripped Key" in result

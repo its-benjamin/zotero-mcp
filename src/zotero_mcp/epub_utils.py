@@ -652,6 +652,8 @@ def parse_epub_for_cfi(epub_path: str) -> tuple[Any, list[dict]]:
         raise ValueError("Could not find rootfile in container.xml")
 
     opf_path = rootfile.get("full-path")
+    if opf_path is None:
+        raise ValueError("Could not find OPF path in container.xml")
     opf_dir = opf_path.rsplit("/", 1)[0] + "/" if "/" in opf_path else ""
 
     # Parse OPF file

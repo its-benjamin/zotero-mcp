@@ -1,14 +1,16 @@
+import pytest
+
 from zotero_mcp import server
 
 
 class DummyContext:
-    def info(self, *_args, **_kwargs):
+    async def info(self, *_args, **_kwargs):
         return None
 
-    def error(self, *_args, **_kwargs):
+    async def error(self, *_args, **_kwargs):
         return None
 
-    def warning(self, *_args, **_kwargs):
+    async def warning(self, *_args, **_kwargs):
         return None
 
 
@@ -24,12 +26,13 @@ class FakeZotero:
         return {"success": {"0": "NOTEKEY01"}}
 
 
-def test_create_note_includes_title_heading(monkeypatch):
+@pytest.mark.asyncio
+async def test_create_note_includes_title_heading(monkeypatch):
     fake_zot = FakeZotero()
     monkeypatch.setattr("zotero_mcp.client.get_zotero_client", lambda: fake_zot)
     monkeypatch.setattr("zotero_mcp.tools.annotations._utils.is_local_mode", lambda: False)
 
-    result = server.create_note(
+    result = await server.create_note(
         item_key="ITEM0001",
         note_title="<Unsafe Title>",
         note_text="Line one\n\nLine two",
