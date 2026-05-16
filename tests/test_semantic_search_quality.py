@@ -235,7 +235,9 @@ class TestGeminiQueryEmbedding:
         ef.max_retries = 1
         ef.rate_limited = True
 
-        assert ef(["some document"]) == [[0.4, 0.5, 0.6]]
+        result = ef(["some document"])
+        assert len(result) == 1
+        assert list(result[0]) == [0.4, 0.5, 0.6]
         assert mock_client.models.embed_content.call_count == 2
         assert sleeps == [30.0]
 
