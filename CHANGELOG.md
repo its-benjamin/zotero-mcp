@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-05-17
+
+### Added
+- **Fork highlights section in README** — documents all differences from upstream (reliability, performance, new tools, embedding providers).
+- **`zotero_move_item` tool** — move items between collections in one call.
+- **`zotero_rename_tag` tool** — rename a tag across the entire library.
+- **Rate-limited Zotero client** — automatic retry with backoff on 429, 503, timeouts, and connection errors.
+- **In-memory TTL cache** — avoids redundant API calls for repeated item metadata lookups.
+- **FTS5 sidecar index** — full-text search for notes and annotations using SQLite FTS5 instead of LIKE scans.
+- **Parallel PDF extraction** — ThreadPoolExecutor for semantic indexing (up to 4x faster on large libraries).
+- **OpenRouter embedding provider** — OpenAI-compatible router supporting many models.
+- **Local HuggingFace Hub embeddings** — run any sentence-transformers model locally for private embeddings.
+- **`zotero-mcp doctor`** — diagnose config, API key, local DB, FTS sidecar, and semantic index status.
+- **`zotero-mcp --version`** — root-level version flag.
+- **Shared input validators** — helpful error messages for invalid item keys, collection keys, tags.
+- **`scripts/ci-local.sh`** — local CI mirror script (ruff + pytest with xdist).
+- **Negative-path test coverage** — configurable failure injection in FakeZotero.
+
+### Fixed
+- **FTS sidecar path bug** — `_get_sidecar_path()` now correctly falls back to `~/.config/zotero-mcp` when env var is unset.
+- **Production assert in scite.py** — replaced with proper validation that works with `-O`.
+- **CI import failures** — bare `from conftest import ...` for xdist compatibility.
+
+### Changed
+- Ruff CI pin changed from exact version to `ruff~=0.15.0` (semver-compatible).
+- Flattened `all` optional dependency extra; removed duplicate `requests` from `scite`.
+- Config loading refactored into shared `config.py` module.
+- Version bump to 0.3.5.
+
 ## [0.3.4] - 2026-05-16
 
 ### Fixed
