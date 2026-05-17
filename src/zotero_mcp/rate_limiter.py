@@ -7,6 +7,7 @@ are intentionally conservative and can be overridden with environment variables.
 
 from __future__ import annotations
 
+import logging
 import os
 import random
 import threading
@@ -133,6 +134,34 @@ def rate_limit(provider: str) -> None:
     get_limiter(provider).wait()
 
 
+_logger = logging.getLogger(__name__)
+
+
+def _is_transient_pyzotero_error(exc: Exception) -> tuple[bool, float | None]:
+    """Check if exception is transient and extract retry delay if available."""
+    # pyzotero wraps HTTP errors; check for response attribute
+    response = getattr(exc, "response", None)
+    if response is not None:
+        status = getattr(response, "status_code", None)
+        if status in (429, 503):
+            return True, _response_backoff_seconds(response)
+        if status in (400, 401, 403, 404, 405, 410):
+            return False, None
+    # Check wrapped requests exceptions
+    cause = getattr(exc, "__cause__", None) or getattr(exc, "__context__", None)
+    if cause is not None:
+        if isinstance(cause, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
+            return True, None
+    # Direct requests exceptions
+    if isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError)):
+        return True, None
+    # Check exception message as fallback
+    msg = str(exc).lower()
+    if any(s in msg for s in ("429", "503", "rate limit", "temporarily unavailable", "timed out")):
+        return True, None
+    return False, None
+
+
 def _response_backoff_seconds(response: Any) -> float | None:
     headers = getattr(response, "headers", {}) or {}
     retry_after = _parse_retry_after(headers.get("Retry-After"))
@@ -189,9 +218,26 @@ class RateLimitedZotero:
             return attr
 
         def limited_call(*args: Any, **kwargs: Any) -> Any:
-            if self._enabled:
-                rate_limit(self._provider)
-            return attr(*args, **kwargs)
+            max_retries = 2
+            for attempt in range(max_retries + 1):
+                if self._enabled:
+                    rate_limit(self._provider)
+                try:
+                    return attr(*args, **kwargs)
+                except Exception as exc:
+                    is_transient, backoff_hint = _is_transient_pyzotero_error(exc)
+                    if not is_transient or attempt >= max_retries:
+                        raise
+                    wait = backoff_hint if backoff_hint is not None else min(10.0, (2**attempt) + random.random())
+                    get_limiter(self._provider).backoff(wait)
+                    _logger.debug(
+                        "Retrying %s.%s after transient error (attempt %d/%d): %s",
+                        type(self._wrapped).__name__,
+                        name,
+                        attempt + 1,
+                        max_retries,
+                        exc,
+                    )
 
         return limited_call
 

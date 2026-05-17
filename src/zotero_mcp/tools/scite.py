@@ -147,7 +147,8 @@ async def enrich_item(
                 return f"Error: no DOI found for Zotero item '{item_key}'"
 
         doi = _helpers._normalize_doi(doi) or doi
-        assert doi is not None
+        if not doi:
+            return "Error: could not determine a valid DOI"
         await ctx.info(f"Fetching Scite data for {doi}")
 
         # Fetch tally + paper metadata in parallel-ish (same thread, two requests)

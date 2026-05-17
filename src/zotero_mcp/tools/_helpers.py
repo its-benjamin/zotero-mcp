@@ -129,6 +129,54 @@ async def _handle_write_response(response, ctx=None):
 
 
 # ---------------------------------------------------------------------------
+# Input validation
+# ---------------------------------------------------------------------------
+
+
+def validate_item_key(key: str | None) -> str | None:
+    """Return error message if key is invalid, else None."""
+    if key is None or not str(key).strip():
+        return "Item key cannot be empty"
+    k = str(key).strip()
+    if len(k) != 8 or not k.isalnum():
+        return f"Invalid item key format: {k!r} (expected 8 alphanumeric characters)"
+    return None
+
+
+def validate_collection_key(key: str | None) -> str | None:
+    """Return error message if collection key is invalid, else None."""
+    if key is None or not str(key).strip():
+        return "Collection key cannot be empty"
+    k = str(key).strip()
+    if len(k) != 8 or not k.isalnum():
+        return f"Invalid collection key format: {k!r} (expected 8 alphanumeric characters)"
+    return None
+
+
+def validate_library_id(lib_id: str | int | None) -> str | None:
+    """Return error message if library ID is invalid, else None."""
+    if lib_id is None:
+        return "Library ID cannot be empty"
+    try:
+        val = int(lib_id)
+        if val <= 0:
+            return f"Library ID must be a positive integer, got {val}"
+    except (ValueError, TypeError):
+        return f"Library ID must be a positive integer, got {lib_id!r}"
+    return None
+
+
+def validate_tag(tag: str | None) -> str | None:
+    """Return error message if tag is invalid, else None."""
+    if tag is None or not str(tag).strip():
+        return "Tag cannot be empty"
+    t = str(tag).strip()
+    if len(t) > 255:
+        return f"Tag too long ({len(t)} chars, max 255)"
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Input normalization
 # ---------------------------------------------------------------------------
 

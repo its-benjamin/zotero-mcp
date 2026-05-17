@@ -11,6 +11,7 @@ from zotero_mcp import client as _client
 from zotero_mcp import utils as _utils
 from zotero_mcp._app import mcp
 from zotero_mcp._context import Context
+from zotero_mcp.cache import get_item_cache
 from zotero_mcp.client import with_zotero_api_lock
 from zotero_mcp.tools import _helpers
 
@@ -63,12 +64,23 @@ async def get_item_metadata(
     """
     _ret_logger = _logging.getLogger("zotero_mcp.retrieval")
     try:
+        key_err = _helpers.validate_item_key(item_key)
+        if key_err:
+            return f"Error: {key_err}"
         await ctx.info(f"Fetching metadata for item {item_key} in {format} format")
         zot = _client.get_zotero_client()
 
-        t0 = _time.monotonic()
-        item = await asyncio.to_thread(zot.item, item_key)
-        _ret_logger.debug(f"[METADATA] zot.item({item_key}): {_time.monotonic() - t0:.2f}s")
+        cache = get_item_cache()
+        cache_key = f"item:{item_key}"
+        item = cache.get(cache_key)
+        if item is None:
+            t0 = _time.monotonic()
+            item = await asyncio.to_thread(zot.item, item_key)
+            _ret_logger.debug(f"[METADATA] zot.item({item_key}): {_time.monotonic() - t0:.2f}s")
+            if item:
+                cache.set(cache_key, item)
+        else:
+            _ret_logger.debug(f"[METADATA] cache hit for {item_key}")
         if not item:
             return f"No item found with key: {item_key}"
 
@@ -118,6 +130,9 @@ async def get_item_fulltext(item_key: str, *, ctx: Context) -> str:
         Markdown-formatted item full text
     """
     try:
+        key_err = _helpers.validate_item_key(item_key)
+        if key_err:
+            return f"Error: {key_err}"
         await ctx.info(f"Fetching full text for item {item_key}")
         zot = await asyncio.to_thread(_client.get_zotero_client)
 

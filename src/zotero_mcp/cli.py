@@ -68,17 +68,14 @@ def load_claude_desktop_env_vars():
 
 def load_standalone_env_vars():
     """Load environment variables from standalone config (~/.config/zotero-mcp/config.json)."""
-    try:
-        from pathlib import Path
+    from zotero_mcp.config import ConfigError, load_config
 
-        cfg_path = Path.home() / ".config" / "zotero-mcp" / "config.json"
-        if not cfg_path.exists():
-            return {}
-        with open(cfg_path) as f:
-            cfg = json.load(f)
-        return cfg.get("client_env", {}) or {}
-    except Exception:
+    try:
+        cfg = load_config()
+    except ConfigError as exc:
+        print(f"Warning: standalone config could not be loaded: {exc}", file=sys.stderr)
         return {}
+    return cfg.get("client_env", {}) or {}
 
 
 def apply_environment_variables(env_vars):
@@ -154,9 +151,79 @@ def setup_zotero_environment():
         apply_environment_variables(fallback_env_vars)
 
 
+def _run_doctor():
+    """Print setup diagnostics without starting the MCP server."""
+    from zotero_mcp.config import ConfigError, get_config_path, load_config
+
+    print("=== Zotero MCP Doctor ===")
+
+    config_path = get_config_path()
+    try:
+        config = load_config(config_path, missing_ok=False)
+        print(f"[OK] Config: {config_path}")
+    except ConfigError as exc:
+        config = {}
+        print(f"[WARN] Config: {exc}")
+
+    setup_zotero_environment()
+
+    local_mode = str(os.environ.get("ZOTERO_LOCAL", "")).lower() in ("1", "true", "yes")
+    print(f"[OK] Mode: {'local' if local_mode else 'web'}")
+
+    api_key = os.environ.get("ZOTERO_API_KEY")
+    if api_key:
+        try:
+            from zotero_mcp import client as _client
+
+            zot = _client.get_web_zotero_client() or _client.get_zotero_client()
+            if hasattr(zot, "key_info"):
+                zot.key_info()
+            print("[OK] Zotero API key: accepted")
+        except Exception as exc:
+            print(f"[WARN] Zotero API key: could not verify ({exc})")
+    else:
+        print("[INFO] Zotero API key: not configured")
+
+    semantic_cfg = config.get("semantic_search", {}) if isinstance(config, dict) else {}
+    db_path = semantic_cfg.get("zotero_db_path") or os.environ.get("ZOTERO_DB_PATH")
+    if db_path:
+        path = Path(db_path)
+        if path.exists():
+            print(f"[OK] Local Zotero DB: {path}")
+        else:
+            print(f"[WARN] Local Zotero DB not found: {path}")
+    else:
+        print("[INFO] Local Zotero DB path: not configured")
+
+    try:
+        from zotero_mcp.fts_index import get_fts_index
+
+        fts = get_fts_index()
+        status = "exists" if fts.exists else "not built"
+        print(f"[OK] FTS sidecar: {status}")
+    except Exception as exc:
+        print(f"[WARN] FTS sidecar: could not inspect ({exc})")
+
+    try:
+        from zotero_mcp.semantic_search import ZoteroSemanticSearch
+
+        ss = ZoteroSemanticSearch()
+        if hasattr(ss, "chroma_client") and ss.chroma_client:
+            info = ss.chroma_client.get_collection_info()
+            count = info.get("count", "unknown") if isinstance(info, dict) else "unknown"
+            print(f"[OK] Semantic index: {count} document(s)")
+        else:
+            print("[INFO] Semantic index: not initialized")
+    except Exception as exc:
+        print(f"[INFO] Semantic index: not available ({type(exc).__name__}: {exc})")
+
+
 def main():
     """Main entry point for the CLI."""
+    from zotero_mcp._version import __version__
+
     parser = argparse.ArgumentParser(description="Zotero Model Context Protocol server")
+    parser.add_argument("--version", action="version", version=f"zotero-mcp {__version__}")
 
     # Create subparsers for different commands
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
@@ -244,6 +311,9 @@ def main():
 
     # Setup info command
     subparsers.add_parser("setup-info", help="Show installation path and configuration info for MCP clients")
+
+    # Doctor command
+    subparsers.add_parser("doctor", help="Diagnose zotero-mcp setup (config, API key, local DB, FTS, semantic index)")
 
     args = parser.parse_args()
 
@@ -364,6 +434,10 @@ def main():
             print("  Status: ⚠️ Not configured")
             print("  💡 Run 'zotero-mcp setup' to configure semantic search")
 
+        sys.exit(0)
+
+    elif args.command == "doctor":
+        _run_doctor()
         sys.exit(0)
 
     elif args.command == "setup":

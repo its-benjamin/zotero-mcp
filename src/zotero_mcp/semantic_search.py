@@ -720,7 +720,6 @@ class ZoteroSemanticSearch:
                     MAX_CONSECUTIVE_TIMEOUTS = 5
                     _extraction_stopped = False  # Set True when circuit breaker trips
 
-                    total_local = len(local_items)
                     _skipped_pdfs = []  # Collect timeout/error names for summary
                     _skipped_failed = []  # Items skipped because extraction previously failed
 
@@ -742,8 +741,9 @@ class ZoteroSemanticSearch:
                     _prev_level = _local_db_logger.level
                     _local_db_logger.setLevel(logging.CRITICAL)
 
+                    # Pre-classify items: which need extraction vs skip
+                    _needs_extraction = []  # (index, item, display_str)
                     for item_idx, it in enumerate(local_items, 1):
-                        # Build display string: Author (Year) — Title
                         title = getattr(it, "title", "") or ""
                         creators = getattr(it, "creators", "") or ""
                         date = getattr(it, "date_added", "") or ""
@@ -764,35 +764,6 @@ class ZoteroSemanticSearch:
                         if len(display) > 60:
                             display = display[:57] + "..."
 
-                        # Single-line progress with \r overwrite
-                        # MUST fit within terminal width to prevent wrapping
-                        try:
-                            try:
-                                term_width = os.get_terminal_size().columns
-                            except (OSError, ValueError):
-                                term_width = 80
-                            # Build the line and truncate to terminal width - 1
-                            # (- 1 to prevent the cursor from wrapping to next line)
-                            max_len = term_width - 1
-                            status_parts = []
-                            if skipped_existing > 0:
-                                status_parts.append(f"{skipped_existing} up to date")
-                            if extracted > 0:
-                                status_parts.append(f"{extracted} extracted")
-                            status = f" ({', '.join(status_parts)})" if status_parts else ""
-                            prefix = f"  Processing {item_idx}/{total_local}{status} — "
-                            # Truncate display to fit remaining space
-                            remaining = max_len - len(prefix) - 3  # -3 for "..."
-                            if remaining > 0 and display and len(display) > remaining:
-                                display = display[:remaining] + "..."
-                            line = f"{prefix}{display or 'working...'}"
-                            if len(line) > max_len:
-                                line = line[:max_len]
-                            sys.stderr.write(f"\r{line}{' ' * max(0, max_len - len(line))}")
-                            sys.stderr.flush()
-                        except Exception:
-                            pass
-
                         should_extract = True
 
                         # CHECK IF ITEM ALREADY EXISTS (unless force_rebuild or no client)
@@ -802,32 +773,75 @@ class ZoteroSemanticSearch:
                                 chroma_has_fulltext = existing_metadata.get("has_fulltext", False)
                                 local_has_fulltext = len(reader.get_fulltext_meta_for_item(it.item_id)) > 0
 
-                                # Skip if extraction previously failed AND the item hasn't been
-                                # modified since (handles case where user replaces a bad PDF)
                                 if chroma_has_fulltext == "failed":
                                     chroma_date = existing_metadata.get("date_modified", "")
                                     item_date = getattr(it, "date_modified", "") or ""
                                     if chroma_date == item_date:
-                                        # Same modification date — don't retry failed extraction
                                         should_extract = False
                                         skipped_existing += 1
                                         _skipped_failed.append(display or f"item {it.key}")
                                     else:
-                                        # Item was modified since last failure — retry
                                         updated_existing += 1
                                 elif not chroma_has_fulltext and local_has_fulltext:
-                                    # Document exists but lacks fulltext - we need to update it
                                     updated_existing += 1
                                 else:
                                     should_extract = False
                                     skipped_existing += 1
 
                         if should_extract:
-                            # Extract fulltext if item doesn't have it yet
-                            # (skip if circuit breaker has tripped)
-                            if not getattr(it, "fulltext", None) and not _extraction_stopped:
-                                text = reader.extract_fulltext_for_item(it.item_id)
-                                # Circuit breaker: stop PDF extraction after consecutive timeouts
+                            _needs_extraction.append((item_idx, it, display))
+
+                    # Parallel extraction using ThreadPoolExecutor
+                    _POOL_SIZE = min(4, os.cpu_count() or 2)
+                    _BATCH_SIZE = _POOL_SIZE * 2
+
+                    def _do_extract(item_id):
+                        return reader.extract_fulltext_for_item(item_id)
+
+                    batch_start = 0
+                    while batch_start < len(_needs_extraction) and not _extraction_stopped:
+                        batch_end = min(batch_start + _BATCH_SIZE, len(_needs_extraction))
+                        batch = _needs_extraction[batch_start:batch_end]
+
+                        # Show progress
+                        try:
+                            try:
+                                term_width = os.get_terminal_size().columns
+                            except (OSError, ValueError):
+                                term_width = 80
+                            max_len = term_width - 1
+                            status_parts = []
+                            if skipped_existing > 0:
+                                status_parts.append(f"{skipped_existing} up to date")
+                            if extracted > 0:
+                                status_parts.append(f"{extracted} extracted")
+                            status = f" ({', '.join(status_parts)})" if status_parts else ""
+                            line = f"  Processing {batch_start + 1}-{batch_end}/{len(_needs_extraction)}{status}"
+                            if len(line) > max_len:
+                                line = line[:max_len]
+                            sys.stderr.write(f"\r{line}{' ' * max(0, max_len - len(line))}")
+                            sys.stderr.flush()
+                        except Exception:
+                            pass
+
+                        # Submit batch to thread pool
+                        futures = {}
+                        with ThreadPoolExecutor(max_workers=_POOL_SIZE) as pool:
+                            for idx, it, display in batch:
+                                if not getattr(it, "fulltext", None):
+                                    futures[pool.submit(_do_extract, it.item_id)] = (it, display)
+                                else:
+                                    # Already has fulltext, just add to process list
+                                    extracted += 1
+                                    items_to_process.append(it)
+
+                            for future in as_completed(futures):
+                                it, display = futures[future]
+                                try:
+                                    text = future.result()
+                                except Exception:
+                                    text = None
+
                                 if isinstance(text, tuple) and len(text) == 2 and text[1] == "timeout":
                                     _skipped_pdfs.append(display or f"item {it.key}")
                                     consecutive_timeouts += 1
@@ -845,25 +859,21 @@ class ZoteroSemanticSearch:
                                         except Exception:
                                             pass
                                         _extraction_stopped = True
-                                    # Don't skip the item — still add it with metadata only
-                                    it._fulltext_attempted = True  # Mark so metadata knows extraction was tried
+                                    it._fulltext_attempted = True
                                 else:
-                                    # Reset counter on successful extraction
                                     if text:
                                         consecutive_timeouts = 0
                                     if text:
-                                        # Support new (text, source) return format
                                         if isinstance(text, tuple) and len(text) == 2:
                                             it.fulltext, it.fulltext_source = text[0], text[1]
                                         else:
                                             it.fulltext = text
                                     else:
-                                        # Extraction returned empty — mark as attempted
                                         it._fulltext_attempted = True
-                            extracted += 1
-                            items_to_process.append(it)
+                                extracted += 1
+                                items_to_process.append(it)
 
-                            # (progress shown inline above via \r)
+                        batch_start = batch_end
 
                     # Restore local_db logger
                     _local_db_logger.setLevel(_prev_level)

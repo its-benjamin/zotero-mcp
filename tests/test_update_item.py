@@ -192,8 +192,8 @@ def _make_book_section_item(
 class FakeZoteroForUpdate(FakeZotero):
     """Extends FakeZotero with update-specific behaviour."""
 
-    def __init__(self, items=None, collections=None):
-        super().__init__()
+    def __init__(self, items=None, collections=None, fail_on=None):
+        super().__init__(fail_on=fail_on)
         self._items = items or []
         self._collections = collections or []
         # Track the exact item dict passed to update_item
@@ -206,6 +206,7 @@ class FakeZoteroForUpdate(FakeZotero):
         raise Exception(f"Item {item_key} not found")
 
     def update_item(self, item, **kwargs):
+        self._maybe_fail("update_item")
         self.update_calls.append(item)
         return _FakeResponse(204)
 
@@ -1220,3 +1221,57 @@ class TestUpdateItemType:
         assert len(fake.update_calls) == 0
         assert "invalid" in result.lower() or "error" in result.lower()
         assert "notATypeAtAll" in result
+
+
+# ---------------------------------------------------------------------------
+# Negative-path: API failures
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateItemNegativePath:
+    @pytest.mark.asyncio
+    async def test_update_item_version_conflict_412(self, monkeypatch):
+        """412 Precondition Failed means version conflict — error surfaced."""
+        item = _make_item()
+        fake = FakeZoteroForUpdate(items=[item], fail_on={"update_item": 412})
+        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
+
+        result = await server.update_item(
+            item_key="ABCD1234",
+            title="New Title",
+            ctx=DummyContext(),
+        )
+
+        assert "error" in result.lower() or "Error" in result
+        assert len(fake.update_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_update_item_unauthorized_403(self, monkeypatch):
+        """403 Forbidden — no write permission."""
+        item = _make_item()
+        fake = FakeZoteroForUpdate(items=[item], fail_on={"update_item": 403})
+        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
+
+        result = await server.update_item(
+            item_key="ABCD1234",
+            title="New Title",
+            ctx=DummyContext(),
+        )
+
+        assert "error" in result.lower() or "Error" in result
+        assert len(fake.update_calls) == 0
+
+    @pytest.mark.asyncio
+    async def test_update_item_not_found_404(self, monkeypatch):
+        """Item key doesn't exist — error surfaced."""
+        fake = FakeZoteroForUpdate(items=[], fail_on={"item": 404})
+        monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
+
+        result = await server.update_item(
+            item_key="NOEXIST1",
+            title="New Title",
+            ctx=DummyContext(),
+        )
+
+        assert "error" in result.lower() or "Error" in result
+        assert len(fake.update_calls) == 0

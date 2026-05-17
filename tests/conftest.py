@@ -19,31 +19,44 @@ class DummyContext:
 class FakeZotero:
     """Minimal pyzotero client stub. Extend per test file as needed."""
 
-    def __init__(self):
+    def __init__(self, fail_on=None):
         self.created = []
         self.updated = []
         self._items = []
         self._collections = []
         self._children = {}
+        self._fail_on = fail_on or {}
         self.library_id = "12345"
         self.library_type = "user"
 
+    def _maybe_fail(self, method_name):
+        status_code = self._fail_on.get(method_name)
+        if status_code is not None:
+            exc = Exception(f"HTTP {status_code}")
+            exc.response = _FakeResponse(status_code)
+            raise exc
+
     def item(self, item_key):
+        self._maybe_fail("item")
         for it in self._items:
             if it.get("key") == item_key:
                 return it
         return {"key": item_key, "version": 1, "data": {"title": "Item " + item_key}}
 
     def items(self, **kwargs):
+        self._maybe_fail("items")
         return self._items
 
     def collections(self, **kwargs):
+        self._maybe_fail("collections")
         return self._collections
 
     def children(self, item_key, **kwargs):
+        self._maybe_fail("children")
         return self._children.get(item_key, [])
 
     def create_items(self, items, **kwargs):
+        self._maybe_fail("create_items")
         self.created.extend(items)
         result = {}
         for i, item in enumerate(items):
@@ -51,12 +64,14 @@ class FakeZotero:
         return {"success": result, "successful": {}, "failed": {}}
 
     def create_collections(self, colls, **kwargs):
+        self._maybe_fail("create_collections")
         result = {}
         for i, c in enumerate(colls):
             result[str(i)] = f"COL{i:04d}"
         return {"success": result, "successful": {}, "failed": {}}
 
     def update_item(self, item, **kwargs):
+        self._maybe_fail("update_item")
         self.updated.append(item)
         # Simulate httpx.Response
         return _FakeResponse(204)

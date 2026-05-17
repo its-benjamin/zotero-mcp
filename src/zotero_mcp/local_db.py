@@ -705,7 +705,22 @@ class LocalZoteroReader:
         return matching_items
 
     def search_notes_local(self, query: str, limit: int = 20) -> list[dict]:
-        """Search notes in the local Zotero database by text content."""
+        """Search notes in the local Zotero database by text content.
+
+        Uses FTS5 sidecar index if available, falls back to LIKE search.
+        """
+        # Try FTS first
+        try:
+            from zotero_mcp.fts_index import get_fts_index
+
+            fts = get_fts_index()
+            if fts.exists:
+                results = fts.search_notes(query, limit)
+                if results:
+                    return results
+        except Exception:
+            pass  # Fall back to LIKE search
+
         conn = self._get_connection()
         cursor = conn.cursor()
         pattern = f"%{query}%"
@@ -748,7 +763,22 @@ class LocalZoteroReader:
         return results
 
     def search_annotations_local(self, query: str, limit: int = 20) -> list[dict]:
-        """Search annotations in the local Zotero database by text or comment."""
+        """Search annotations in the local Zotero database by text or comment.
+
+        Uses FTS5 sidecar index if available, falls back to LIKE search.
+        """
+        # Try FTS first
+        try:
+            from zotero_mcp.fts_index import get_fts_index
+
+            fts = get_fts_index()
+            if fts.exists:
+                results = fts.search_annotations(query, limit)
+                if results:
+                    return results
+        except Exception:
+            pass  # Fall back to LIKE search
+
         conn = self._get_connection()
         cursor = conn.cursor()
         pattern = f"%{query}%"

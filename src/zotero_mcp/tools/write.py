@@ -1212,6 +1212,9 @@ async def update_item(
 
         resp = write_zot.update_item(item)
         if await _helpers._handle_write_response(resp, ctx):
+            from zotero_mcp.cache import get_item_cache
+
+            get_item_cache().invalidate(f"item:{item_key}")
             result = f"Successfully updated item `{item_key}`:\n\n" + "\n".join(changes)
             return result + skip_warning
         return "Failed to update item: write operation returned failure"
@@ -1285,6 +1288,9 @@ async def delete_item(item_key: str, allow_note: bool = False, *, ctx: Context) 
             content=json.dumps({"deleted": 1}),
         )
         if resp.status_code in (200, 204):
+            from zotero_mcp.cache import get_item_cache
+
+            get_item_cache().invalidate(f"item:{item_key}")
             return f"Successfully trashed item {item_key} (type={item_type}, recoverable from Zotero's Trash)"
         return f"Failed to trash item {item_key} (HTTP {resp.status_code}): {resp.text[:200]}"
 
@@ -1862,3 +1868,161 @@ async def add_from_file(
     except Exception as e:
         await ctx.error(f"Error adding from file: {e}")
         return f"Error adding from file: {e}"
+
+
+@mcp.tool(
+    name="zotero_move_item",
+    description=(
+        "Move an item from one collection to another. "
+        "Removes the item from the source collection and adds it to the target. "
+        "If source_collection is omitted, the item is simply added to the target. "
+        "item_key: 8-character Zotero item key. "
+        "target_collection: key of the collection to move the item into. "
+        "source_collection: (optional) key of the collection to remove the item from."
+    ),
+)
+@with_zotero_api_lock
+async def move_item(
+    item_key: str,
+    target_collection: str,
+    source_collection: str | None = None,
+    *,
+    ctx: Context,
+) -> str:
+    """Move an item between collections."""
+    try:
+        key_err = _helpers.validate_item_key(item_key)
+        if key_err:
+            return f"Error: {key_err}"
+        tgt_err = _helpers.validate_collection_key(target_collection)
+        if tgt_err:
+            return f"Error: target_collection - {tgt_err}"
+        if source_collection:
+            src_err = _helpers.validate_collection_key(source_collection)
+            if src_err:
+                return f"Error: source_collection - {src_err}"
+
+        try:
+            read_zot, write_zot = _helpers._get_write_client(ctx)
+        except ValueError as e:
+            return str(e)
+
+        await ctx.info(f"Moving item {item_key} to collection {target_collection}")
+
+        item = await asyncio.to_thread(read_zot.item, item_key)
+        if not item:
+            return f"Error: No item found with key: {item_key}"
+
+        data = item.get("data", {})
+        collections = set(data.get("collections", []))
+
+        if source_collection and source_collection not in collections:
+            return f"Error: Item {item_key} is not in collection {source_collection}"
+
+        if source_collection:
+            collections.discard(source_collection)
+        collections.add(target_collection)
+
+        data["collections"] = list(collections)
+        item["data"] = data
+
+        response = await asyncio.to_thread(write_zot.update_item, item)
+        if not await _helpers._handle_write_response(response, ctx):
+            return f"Error: Failed to move item {item_key}"
+
+        from zotero_mcp.cache import get_item_cache
+
+        get_item_cache().invalidate(f"item:{item_key}")
+
+        src_msg = f" from {source_collection}" if source_collection else ""
+        return f"Moved item {item_key}{src_msg} to collection {target_collection}"
+
+    except Exception as e:
+        await ctx.error(f"Error moving item: {e}")
+        return f"Error moving item: {e}"
+
+
+@mcp.tool(
+    name="zotero_rename_tag",
+    description=(
+        "Rename a tag across all items that have it. "
+        "Finds all items with old_tag, removes it, and adds new_tag. "
+        "old_tag: the tag name to rename. "
+        "new_tag: the new tag name. "
+        "limit: max items to process (default 100)."
+    ),
+)
+@with_zotero_api_lock
+async def rename_tag(
+    old_tag: str,
+    new_tag: str,
+    limit: int | str = 100,
+    *,
+    ctx: Context,
+) -> str:
+    """Rename a tag across all items."""
+    try:
+        old_err = _helpers.validate_tag(old_tag)
+        if old_err:
+            return f"Error: old_tag - {old_err}"
+        new_err = _helpers.validate_tag(new_tag)
+        if new_err:
+            return f"Error: new_tag - {new_err}"
+
+        old_tag = old_tag.strip()
+        new_tag = new_tag.strip()
+
+        if old_tag == new_tag:
+            return "Error: old_tag and new_tag are the same"
+
+        try:
+            read_zot, write_zot = _helpers._get_write_client(ctx)
+        except ValueError as e:
+            return str(e)
+
+        await ctx.info(f"Renaming tag '{old_tag}' to '{new_tag}'")
+
+        limit = _helpers._normalize_limit(limit, default=100, max_val=500)
+        items = await asyncio.to_thread(lambda: _helpers._paginate(read_zot.items, tag=old_tag, max_items=limit))
+
+        if not items:
+            return f"No items found with tag '{old_tag}'"
+
+        updated = 0
+        errors = []
+        for item in items:
+            data = item.get("data", {})
+            tags = data.get("tags", [])
+
+            new_tags = [t for t in tags if t.get("tag") != old_tag]
+            if not any(t.get("tag") == new_tag for t in new_tags):
+                new_tags.append({"tag": new_tag})
+
+            if len(new_tags) == len(tags) and all(t.get("tag") != old_tag for t in tags):
+                continue
+
+            data["tags"] = new_tags
+            item["data"] = data
+
+            try:
+                response = await asyncio.to_thread(write_zot.update_item, item)
+                if await _helpers._handle_write_response(response, ctx):
+                    updated += 1
+                    from zotero_mcp.cache import get_item_cache
+
+                    get_item_cache().invalidate(f"item:{item['key']}")
+                else:
+                    errors.append(item["key"])
+            except Exception as e:
+                errors.append(f"{item['key']}: {e}")
+
+        result = f"Renamed tag '{old_tag}' to '{new_tag}' on {updated} item(s)"
+        if errors:
+            result += f"\nFailed on {len(errors)} item(s): {errors[:5]}"
+            if len(errors) > 5:
+                result += f" ... and {len(errors) - 5} more"
+        return result
+
+    except Exception as e:
+        await ctx.error(f"Error renaming tag: {e}")
+        return f"Error renaming tag: {e}"
