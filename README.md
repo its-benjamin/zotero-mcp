@@ -31,7 +31,7 @@ This fork is released from GitHub only. It is not published to PyPI; install it 
 
 ### 🧠 AI-Powered Semantic Search
 - **Vector-based similarity search** over your entire research library (requires `[semantic]` extra)
-- **Multiple embedding models**: Default (free, local), OpenAI, Gemini, and Voyage AI
+- **Multiple embedding models**: Default (free, local), OpenAI, Gemini, Voyage AI, OpenRouter, and any HuggingFace Hub model
 - **Intelligent results** with similarity scores and contextual matching
 - **Auto-updating database** with configurable sync schedules
 
@@ -161,6 +161,26 @@ zotero-mcp setup --semantic-config-only
 - **OpenAI**: Better quality, requires API key (`text-embedding-3-small` or `text-embedding-3-large`)
 - **Gemini**: Better quality, requires API key (`gemini-embedding-001`)
 - **Voyage AI**: Better retrieval quality, requires API key (`voyage-4-lite`)
+- **OpenRouter**: OpenAI-compatible router supporting many models, requires API key (default: `openai/text-embedding-3-small`)
+- **Local HuggingFace**: Run any sentence-transformers model locally (e.g., `intfloat/e5-small-v2`, `BAAI/bge-small-en-v1.5`)
+
+OpenRouter uses the OpenAI-compatible `/embeddings` endpoint at `https://openrouter.ai/api/v1` and is a remote provider; it is not part of local-only mode. Example config:
+
+```json
+{
+  "semantic_search": {
+    "embedding_model": "openrouter",
+    "embedding_config": {
+      "model_name": "openai/text-embedding-3-small",
+      "api_key": "${OPENROUTER_API_KEY}"
+    }
+  }
+}
+```
+
+For local/private embeddings, set `embedding_model` directly to a HuggingFace Hub model name such as `intfloat/e5-small-v2`, `BAAI/bge-small-en-v1.5`, or `Qwen/Qwen3-Embedding-0.6B`. The first run downloads model weights locally.
+
+Changing `embedding_model` resets the semantic index model metadata. Rebuild with `zotero-mcp update-db --force-rebuild` after switching providers or model names.
 
 **Update Frequency Options:**
 - **Manual**: Update only when you run `zotero-mcp update-db`
@@ -297,7 +317,7 @@ zotero-mcp setup --no-local --api-key YOUR_API_KEY --library-id YOUR_LIBRARY_ID
 - `ZOTERO_LIBRARY_TYPE`: The type of library (user or group, default: user)
 
 **Semantic Search:**
-- `ZOTERO_EMBEDDING_MODEL`: Embedding model to use (default, openai, gemini, voyage)
+- `ZOTERO_EMBEDDING_MODEL`: Embedding model to use (`default`, `openai`, `gemini`, `voyage`, `openrouter`, or any HuggingFace Hub model name like `intfloat/e5-small-v2`)
 - `OPENAI_API_KEY`: Your OpenAI API key (for OpenAI embeddings)
 - `OPENAI_EMBEDDING_MODEL`: OpenAI model name (text-embedding-3-small, text-embedding-3-large)
 - `OPENAI_BASE_URL`: Custom OpenAI endpoint URL (optional, for use with compatible APIs)
@@ -311,6 +331,9 @@ zotero-mcp setup --no-local --api-key YOUR_API_KEY --library-id YOUR_LIBRARY_ID
 - `VOYAGE_TOKENS_PER_MINUTE`: Voyage embedding token budget used by the local throttler (default: 10000)
 - `VOYAGE_REQUEST_BATCH_SIZE`: Voyage embedding request batch size (default: 16)
 - `VOYAGE_OUTPUT_DIMENSION`: Voyage embedding output dimension for Voyage 4 models (default: 512)
+- `OPENROUTER_API_KEY`: Your OpenRouter API key (for OpenRouter embeddings)
+- `OPENROUTER_EMBEDDING_MODEL`: OpenRouter model name (default: `openai/text-embedding-3-small`)
+- `OPENROUTER_BASE_URL`: Custom OpenRouter endpoint URL (default: `https://openrouter.ai/api/v1`)
 - `ZOTERO_DB_PATH`: Custom `zotero.sqlite` path (optional)
 
 **API Rate Limits:**

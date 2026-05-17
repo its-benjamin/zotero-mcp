@@ -165,12 +165,14 @@ def setup_semantic_search(existing_semantic_config: dict | None = None, semantic
     print("2. OpenAI - Better quality, requires API key")
     print("3. Gemini - Better quality, requires API key")
     print("4. Voyage AI - Better retrieval quality, requires API key")
+    print("5. OpenRouter - OpenAI-compatible router, requires API key")
+    print("6. Local HuggingFace model - Run a Hugging Face Hub model locally")
 
     while True:
-        choice = input("\nChoose embedding model (1-4): ").strip()
-        if choice in ["1", "2", "3", "4"]:
+        choice = input("\nChoose embedding model (1-6): ").strip()
+        if choice in ["1", "2", "3", "4", "5", "6"]:
             break
-        print("Please enter 1, 2, 3, or 4")
+        print("Please enter 1, 2, 3, 4, 5, or 6")
 
     config = {}
 
@@ -257,6 +259,47 @@ def setup_semantic_search(existing_semantic_config: dict | None = None, semantic
             print(f"Using custom Voyage base URL: {base_url}")
         else:
             print("Using default Voyage base URL")
+
+    elif choice == "5":
+        config["embedding_model"] = "openrouter"
+
+        default_or_model = "openai/text-embedding-3-small"
+        model_name = input(f"Enter OpenRouter embedding model name [{default_or_model}]: ").strip() or default_or_model
+        config["embedding_config"] = {"model_name": model_name}
+
+        env_or_key = os.environ.get("OPENROUTER_API_KEY", "")
+        prompt_suffix = " (leave blank to use $OPENROUTER_API_KEY)" if env_or_key else ""
+        api_key = getpass.getpass(f"Enter your OpenRouter API key (hidden){prompt_suffix}: ").strip()
+        if api_key:
+            config["embedding_config"]["api_key"] = api_key
+        elif env_or_key:
+            print("Using OPENROUTER_API_KEY from environment.")
+        else:
+            print("Warning: No API key provided. Set OPENROUTER_API_KEY environment variable.")
+
+        base_url = input("Enter custom OpenRouter base URL (leave blank for default): ").strip()
+        if base_url:
+            config["embedding_config"]["base_url"] = base_url
+            print(f"Using custom OpenRouter base URL: {base_url}")
+        else:
+            print("Using default OpenRouter base URL (https://openrouter.ai/api/v1)")
+        print("Note: OpenRouter is a remote service and is not part of local-only mode.")
+
+    elif choice == "6":
+        print("\nLocal HuggingFace model:")
+        print("Enter any sentence-transformers compatible model name from huggingface.co.")
+        print("Examples: intfloat/e5-small-v2, BAAI/bge-small-en-v1.5, Qwen/Qwen3-Embedding-0.6B")
+
+        while True:
+            model_name = input("HuggingFace model name: ").strip()
+            if model_name:
+                break
+            print("Please enter a non-empty model name.")
+
+        config["embedding_model"] = model_name
+        config["embedding_config"] = {"model_name": model_name}
+        print(f"Using local HuggingFace model: {model_name}")
+        print("The first run will download the model weights from Hugging Face Hub.")
 
     # Configure update frequency
     print("\n=== Database Update Configuration ===")

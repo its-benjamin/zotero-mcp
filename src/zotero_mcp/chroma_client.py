@@ -167,6 +167,43 @@ class OpenAIEmbeddingFunction(EmbeddingFunction):
         return text
 
 
+class OpenRouterEmbeddingFunction(OpenAIEmbeddingFunction):
+    """OpenRouter embedding function using the OpenAI-compatible API."""
+
+    DEFAULT_MODEL_NAME = "openai/text-embedding-3-small"
+    DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+
+    def __init__(
+        self,
+        model_name: str = DEFAULT_MODEL_NAME,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        request_batch_size: int | None = None,
+        rate_limit_rps: float | None = None,
+    ):
+        super().__init__(
+            model_name=model_name,
+            api_key=api_key or os.getenv("OPENROUTER_API_KEY"),
+            base_url=base_url or os.getenv("OPENROUTER_BASE_URL") or self.DEFAULT_BASE_URL,
+            request_batch_size=request_batch_size,
+            rate_limit_rps=rate_limit_rps,
+        )
+
+    @staticmethod
+    def name() -> str:
+        return "openrouter"
+
+    @staticmethod
+    def build_from_config(config: dict[str, Any]) -> "OpenRouterEmbeddingFunction":
+        return OpenRouterEmbeddingFunction(
+            model_name=config.get("model_name", OpenRouterEmbeddingFunction.DEFAULT_MODEL_NAME),
+            api_key=config.get("api_key"),
+            base_url=config.get("base_url"),
+            request_batch_size=config.get("request_batch_size"),
+            rate_limit_rps=config.get("rate_limit_rps"),
+        )
+
+
 class GeminiEmbeddingFunction(EmbeddingFunction):
     """Custom Gemini embedding function for ChromaDB using google-genai."""
 
@@ -945,6 +982,24 @@ class ChromaClient:
                 output_dimension=output_dimension,
             )
 
+        elif self.embedding_model == "openrouter":
+            model_name = self.embedding_config.get("model_name", OpenRouterEmbeddingFunction.DEFAULT_MODEL_NAME)
+            api_key = self.embedding_config.get("api_key")
+            base_url = self.embedding_config.get("base_url")
+            request_batch_size = self.embedding_config.get("request_batch_size")
+            rate_limit_rps = (
+                self.embedding_config.get("rate_limit_rps")
+                if self.embedding_config.get("rate_limit_rps") is not None
+                else self.embedding_config.get("_semantic_rate_limit_rps")
+            )
+            return OpenRouterEmbeddingFunction(
+                model_name=model_name,
+                api_key=api_key,
+                base_url=base_url,
+                request_batch_size=request_batch_size,
+                rate_limit_rps=rate_limit_rps,
+            )
+
         elif self.embedding_model == "qwen":
             model_name = self.embedding_config.get("model_name", "Qwen/Qwen3-Embedding-0.6B")
             return HuggingFaceEmbeddingFunction(model_name=model_name)
@@ -953,7 +1008,7 @@ class ChromaClient:
             model_name = self.embedding_config.get("model_name", "google/embeddinggemma-300m")
             return HuggingFaceEmbeddingFunction(model_name=model_name)
 
-        elif self.embedding_model not in ["default", "openai", "gemini", "voyage"]:
+        elif self.embedding_model not in ["default", "openai", "openrouter", "gemini", "voyage"]:
             # Treat any other value as a HuggingFace model name
             return HuggingFaceEmbeddingFunction(model_name=self.embedding_model)
 
@@ -1320,6 +1375,19 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
         ec.setdefault("tokens_per_minute", VoyageEmbeddingFunction.DEFAULT_TOKENS_PER_MINUTE)
         ec.setdefault("max_retries", VoyageEmbeddingFunction.DEFAULT_MAX_RETRIES)
         ec.setdefault("output_dimension", VoyageEmbeddingFunction.DEFAULT_OUTPUT_DIMENSION)
+        if ec.get("api_key"):
+            config["embedding_config"] = ec
+
+    elif config["embedding_model"] == "openrouter":
+        ec = dict(config.get("embedding_config") or {})
+        if not ec.get("api_key"):
+            env_key = os.getenv("OPENROUTER_API_KEY")
+            if env_key:
+                ec["api_key"] = env_key
+        if not ec.get("model_name"):
+            ec["model_name"] = os.getenv("OPENROUTER_EMBEDDING_MODEL", OpenRouterEmbeddingFunction.DEFAULT_MODEL_NAME)
+        if not ec.get("base_url"):
+            ec["base_url"] = os.getenv("OPENROUTER_BASE_URL", OpenRouterEmbeddingFunction.DEFAULT_BASE_URL)
         if ec.get("api_key"):
             config["embedding_config"] = ec
 
