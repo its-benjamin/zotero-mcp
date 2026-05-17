@@ -1,6 +1,12 @@
-from unittest.mock import patch
+import sys
+from unittest.mock import MagicMock, patch
 
 from zotero_mcp.chroma_client import OpenRouterEmbeddingFunction
+
+# Ensure `openai` is importable even when the package is not installed (CI).
+# We insert a MagicMock module so `patch("openai.OpenAI")` can resolve.
+if "openai" not in sys.modules:
+    sys.modules["openai"] = MagicMock()
 
 
 def test_openrouter_default_model_name():
