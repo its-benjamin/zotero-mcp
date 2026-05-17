@@ -3,8 +3,7 @@
 from unittest.mock import patch
 
 import pytest
-
-from tests.conftest import DummyContext, FakeZotero, _FakeResponse
+from conftest import DummyContext, FakeZotero, _FakeResponse
 
 
 class FakeZoteroForMove(FakeZotero):
