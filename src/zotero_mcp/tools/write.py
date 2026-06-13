@@ -2757,3 +2757,193 @@ async def delete_tags(tags: str, *, ctx: Context) -> str:
     except Exception as e:
         await ctx.error(f"Error deleting tags: {str(e)}")
         return f"Error deleting tags: {str(e)}"
+
+
+@mcp.tool(
+    name="zotero_search_papers",
+    annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True),
+    description=(
+        "Search for academic papers across Semantic Scholar and OpenAlex. "
+        "Returns DOIs, titles, authors, year, venue. "
+        "Use add_to_zotero=true with specific DOIs to add papers to the library. "
+        "Good alternative to Google Scholar (which blocks automated access). "
+        "Works well for Indonesian and international papers."
+    ),
+)
+async def search_papers(
+    query: str,
+    limit: int | str = 10,
+    source: Literal["semantic_scholar", "openalex", "both"] = "both",
+    add_to_zotero: bool = False,
+    *,
+    ctx: Context,
+) -> str:
+    """
+    Search for academic papers using Semantic Scholar and/or OpenAlex.
+
+    Args:
+        query: Search query (can be in any language)
+        limit: Max results per source (default 10, max 50)
+        source: Which API to search: "semantic_scholar", "openalex", or "both"
+        add_to_zotero: If True, add found papers to Zotero by DOI
+        ctx: MCP context
+
+    Returns:
+        Formatted list of papers found
+    """
+    try:
+        limit = _helpers._normalize_limit(limit, max_val=50)
+    except ValueError as e:
+        return str(e)
+
+    results = []
+
+    # Search Semantic Scholar
+    if source in ("semantic_scholar", "both"):
+        try:
+            ss_results = await _search_semantic_scholar(query, limit)
+            results.extend(ss_results)
+        except Exception as e:
+            await ctx.error(f"Semantic Scholar error: {e}")
+
+    # Search OpenAlex
+    if source in ("openalex", "both"):
+        try:
+            oa_results = await _search_openalex(query, limit)
+            results.extend(oa_results)
+        except Exception as e:
+            await ctx.error(f"OpenAlex error: {e}")
+
+    if not results:
+        return "No papers found for your query."
+
+    # Deduplicate by DOI
+    seen_dois = set()
+    unique_results = []
+    for paper in results:
+        doi = paper.get("doi")
+        if doi and doi in seen_dois:
+            continue
+        if doi:
+            seen_dois.add(doi)
+        unique_results.append(paper)
+
+    # Add to Zotero if requested
+    added_count = 0
+    if add_to_zotero:
+        dois_to_add = [p["doi"] for p in unique_results if p.get("doi")]
+        if dois_to_add:
+            for doi in dois_to_add:
+                try:
+                    result = await add_by_doi(doi=doi, ctx=ctx)
+                    if "Added" in result or "already in your library" in result:
+                        added_count += 1
+                except Exception as e:
+                    await ctx.error(f"Failed to add {doi}: {e}")
+
+    # Format output
+    output_lines = [f"Found {len(unique_results)} papers:"]
+    for i, paper in enumerate(unique_results, 1):
+        doi = paper.get("doi", "No DOI")
+        title = paper.get("title", "Untitled")
+        authors = ", ".join(paper.get("authors", [])[:3])
+        if len(paper.get("authors", [])) > 3:
+            authors += " et al."
+        year = paper.get("year", "Unknown")
+        venue = paper.get("venue", "")
+        source_name = paper.get("source", "")
+
+        output_lines.append(f"\n{i}. {title}")
+        output_lines.append(f"   Authors: {authors}")
+        output_lines.append(f"   Year: {year}")
+        if venue:
+            output_lines.append(f"   Venue: {venue}")
+        output_lines.append(f"   DOI: {doi}")
+        output_lines.append(f"   Source: {source_name}")
+
+    if add_to_zotero:
+        output_lines.append(f"\nAdded {added_count} papers to Zotero.")
+
+    return "\n".join(output_lines)
+
+
+async def _search_semantic_scholar(query: str, limit: int) -> list[dict]:
+    """Search Semantic Scholar API for papers."""
+    import asyncio
+
+    url = "https://api.semanticscholar.org/graph/v1/paper/search"
+    params = {
+        "query": query,
+        "limit": min(limit, 100),
+        "fields": "title,authors,year,venue,externalIds",
+    }
+
+    loop = asyncio.get_event_loop()
+    resp = await loop.run_in_executor(
+        None,
+        lambda: rate_limited_get("semantic_scholar", url, params=params, timeout=15),
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    results = []
+    for paper in data.get("data", []):
+        doi = paper.get("externalIds", {}).get("DOI")
+        authors = [a.get("name", "") for a in paper.get("authors", [])]
+        results.append({
+            "title": paper.get("title"),
+            "doi": doi,
+            "authors": authors,
+            "year": paper.get("year"),
+            "venue": paper.get("venue"),
+            "source": "Semantic Scholar",
+        })
+
+    return results
+
+
+async def _search_openalex(query: str, limit: int) -> list[dict]:
+    """Search OpenAlex API for papers."""
+    import asyncio
+
+    url = "https://api.openalex.org/works"
+    params = {
+        "search": query,
+        "per_page": min(limit, 100),
+        "select": "id,doi,title,publication_year,authorships,primary_location",
+    }
+
+    loop = asyncio.get_event_loop()
+    resp = await loop.run_in_executor(
+        None,
+        lambda: rate_limited_get("openalex", url, params=params, timeout=15),
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    results = []
+    for work in data.get("results", []):
+        doi_raw = work.get("doi", "")
+        doi = doi_raw.replace("https://doi.org/", "") if doi_raw else None
+
+        authors = []
+        for authorship in work.get("authorships", [])[:5]:
+            author_name = authorship.get("author", {}).get("display_name", "")
+            if author_name:
+                authors.append(author_name)
+
+        venue = None
+        primary_loc = work.get("primary_location", {})
+        if primary_loc and primary_loc.get("source"):
+            venue = primary_loc["source"].get("display_name")
+
+        results.append({
+            "title": work.get("title"),
+            "doi": doi,
+            "authors": authors,
+            "year": work.get("publication_year"),
+            "venue": venue,
+            "source": "OpenAlex",
+        })
+
+    return results

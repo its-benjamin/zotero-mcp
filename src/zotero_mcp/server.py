@@ -116,6 +116,7 @@ from zotero_mcp.tools.write import (  # noqa: F401
     merge_duplicates,
     remove_item_relation,
     search_collections,
+    search_papers,
     update_item,
 )
 from zotero_mcp.utils import (  # noqa: F401
