@@ -7,70 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.6] - 2026-05-26
-
-### Fixed
-- Embedding providers now load API keys from process environment, `.env`, and Windows persistent user/machine environment. This fixes Voyage semantic search when `VOYAGE_API_KEY` is set in Windows but the MCP process has a stale environment snapshot.
-
-### Changed
-- Version bump to 0.3.6.
-
-## [0.3.5] - 2026-05-17
+## [0.5.0] - 2026-06-08
 
 ### Added
-- **Fork highlights section in README** — documents all differences from upstream (reliability, performance, new tools, embedding providers).
-- **`zotero_move_item` tool** — move items between collections in one call.
-- **`zotero_rename_tag` tool** — rename a tag across the entire library.
-- **Rate-limited Zotero client** — automatic retry with backoff on 429, 503, timeouts, and connection errors.
-- **In-memory TTL cache** — avoids redundant API calls for repeated item metadata lookups.
-- **FTS5 sidecar index** — full-text search for notes and annotations using SQLite FTS5 instead of LIKE scans.
-- **Parallel PDF extraction** — ThreadPoolExecutor for semantic indexing (up to 4x faster on large libraries).
-- **OpenRouter embedding provider** — OpenAI-compatible router supporting many models.
-- **Local HuggingFace Hub embeddings** — run any sentence-transformers model locally for private embeddings.
-- **`zotero-mcp doctor`** — diagnose config, API key, local DB, FTS sidecar, and semantic index status.
-- **`zotero-mcp --version`** — root-level version flag.
-- **Shared input validators** — helpful error messages for invalid item keys, collection keys, tags.
-- **`scripts/ci-local.sh`** — local CI mirror script (ruff + pytest with xdist).
-- **Negative-path test coverage** — configurable failure injection in FakeZotero.
-
-### Fixed
-- **FTS sidecar path bug** — `_get_sidecar_path()` now correctly falls back to `~/.config/zotero-mcp` when env var is unset.
-- **Production assert in scite.py** — replaced with proper validation that works with `-O`.
-- **CI import failures** — bare `from conftest import ...` for xdist compatibility.
+- **`zotero_get_page_layout` tool** — detect figure/table regions on a PDF page with bounding boxes and caption association, for coordinate-grounded reading (#312).
+- **`zotero_add_by_bibtex`** — ingest one or more items from a BibTeX string OR a `.bib`/`.bibtex` file path; parses via `bibtexparser` (with LaTeX→unicode conversion), maps to Zotero item format, preserves the citation key in Extra, and attempts an open-access PDF attachment when a DOI is present (#241).
+- **`zotero_add_by_csl_json`** — same for CSL JSON input from an inline string/object/array OR a `.json`/`.csljson` file path. The CSL `id` is preserved in Extra as the citation key (#241).
+- New `citation_import` module — BibTeX parsing, CSL JSON coercion, and the shared field/type crosswalk (reference: <https://aurimasv.github.io/z2csl/typeMap.xml>).
+- **`zotero_read_pdf_pages` tool** — read a specific page range from a PDF attachment after section identification via `zotero_get_pdf_outline`. Extracts text from the requested pages using PyMuPDF, avoiding the need to read the entire paper when only a few pages are relevant.
+- RSS feed items now surface their publication date (and DOI) (#316).
 
 ### Changed
-- Ruff CI pin changed from exact version to `ruff~=0.15.0` (semver-compatible).
-- Flattened `all` optional dependency extra; removed duplicate `requests` from `scite`.
-- Config loading refactored into shared `config.py` module.
-- Version bump to 0.3.5.
-
-## [0.3.4] - 2026-05-16
+- Bumped the `pyzotero` floor to `>=1.8.0` — the first release accepting the custom HTTP/1.1 `client=` used by the local-API fix; older `1.6.x`/`1.7.x` crashed every tool call with `TypeError: unexpected keyword argument 'client'` (#322).
+- Bumped the `[semantic]` extra's `chromadb` floor to `>=1.0.0` for `register_embedding_function`, introduced in chromadb 1.0.0 (#324).
+- New base dependency: `bibtexparser>=1.4,<2`.
 
 ### Fixed
-- **Standalone CLI broken after async migration** — `zotero-cli` commands printed coroutine objects instead of results. Added `_ToolModuleProxy` to bridge async tool functions back to sync CLI handlers.
-- **Test suite hangs** — `server_lifespan` now cancels the background semantic-update task on shutdown, preventing indefinite hangs when the context manager exits early.
-- **arXiv URL test mocks** — tests now mock `rate_limited_get` (the actual call path) instead of `requests.get`, eliminating real network calls and rate-limiter sleeps during tests.
+- `zotero_search_by_citation_key` now matches the native `citationKey` field, not just the `Extra` fallback (#319).
+- Custom OpenAI/Gemini/HuggingFace embedding functions are registered with ChromaDB's registry so a persisted database reloads correctly (#315).
+- Bounded the global Zotero API lock so a stuck operation can't wedge every tool with opaque `-32001` timeouts (#311).
+- `zotero_add_by_url` arXiv path is resilient to arXiv outages via a CrossRef fallback (#310).
+- `zotero_add_by_doi` and arXiv PDF uploads now honor `ZOTERO_WEBDAV_*` instead of always going to Zotero cloud storage (#314, #313).
+- Strip the pyzotero-rejected `lastRead` field on attachment updates, fixing `zotero_update_item` failures on attachments opened in Zotero's PDF reader (#318, #317).
 
-### Changed
-- Version bump to 0.3.4.
-
-## [0.3.3] - 2026-05-16
-
-### Added
-- **CI lint job** — `ruff check` and `ruff format --check` run before tests in GitHub Actions.
-- **Python 3.13 support** — added to CI test matrix.
-- **`py.typed` marker** — package now declares PEP 561 typing support.
-- **CONTRIBUTING.md** — developer setup, local checks, and PR guidelines.
-- **GitHub issue templates** — structured bug report and feature request forms.
-- **Startup connection check** — `get_zotero_client()` now raises a clear `ConnectionError` when `ZOTERO_LOCAL=true` and Zotero desktop is not reachable on `localhost:23119`.
-
-### Fixed
-- Resolved all 143 ruff lint errors: unused imports/variables, ambiguous variable names, unsorted imports, f-strings without placeholders, missing newlines.
-- Fixed indentation corruption in `tools/retrieval.py` and `tools/write.py`.
-
-### Changed
-- Applied `ruff format` across entire codebase for consistent style.
-- Version bump to 0.3.3.
+### Security
+- **SSRF guard on the open-access PDF download path** — the OA-PDF URL comes from third-party metadata APIs (Unpaywall / Semantic Scholar) and was previously fetched with no scheme/host validation and default redirect-following. It is now validated against a public-host allowlist (rejecting loopback / link-local / RFC1918 / cloud-metadata) with per-redirect-hop re-checking (#327, #326).
+- **Credential-hygiene + DoS hardening**: mask `ZOTERO_API_KEY` in `setup --no-claude` output by default (`--show-secrets` to opt in); write credential config files with `0o600`; prefer the env var / `getpass` over the `--api-key` flag; add a subprocess timeout to `pdfannots2json`; run the Docker image as a non-root user (#328, #326).
 
 ## [0.2.2] - 2026-03-26
 

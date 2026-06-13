@@ -1,4 +1,4 @@
-name: Test and build GitHub release artifacts
+name: Build and publish to PyPI
 on:
   push:
     tags:
@@ -11,65 +11,31 @@ on:
     - cron: '0 6 * * 1'
 
 jobs:
-  lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install ruff
-        run: python -m pip install "ruff~=0.15.0"
-      - name: Run ruff check
-        run: ruff check .
-      - name: Run ruff format check
-        run: ruff format --check .
-
-  typecheck:
-    runs-on: ubuntu-latest
-    continue-on-error: true  # informational until type errors are resolved
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.14"
-          cache: pip
-      - name: Install package and pyright
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pyright
-          python -m pip install -e .
-      - name: Run pyright
-        run: pyright src/zotero_mcp --level warning || true
-
   test:
-    needs: lint
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.14"]
+        python-version: ["3.10", "3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
       - name: Install package and test dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest pytest-asyncio pytest-xdist fastmcp pyzotero python-dotenv markitdown[pdf] chromadb unidecode
+          python -m pip install pytest pytest-timeout fastmcp pyzotero python-dotenv markitdown[pdf] chromadb unidecode bibtexparser tiktoken
           python -m pip install -e . --no-deps
       - name: Run tests
-        run: pytest -q -n auto
+        run: pytest --ignore=tests/test_lifespan.py
 
   build:
     needs: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
       - name: Build package
@@ -82,26 +48,20 @@ jobs:
           name: dist
           path: dist/
 
-  github-release-artifacts:
+  publish:
     needs: [test, build]
     runs-on: ubuntu-latest
-    # Upload artifacts whenever the ref is a tag, regardless of how the workflow
-    # was triggered. This covers:
-    #  - `git push --tags` (push event on refs/tags/*)
-    #  - `gh workflow run --ref vX.Y.Z` (workflow_dispatch on a tag)
-    # GitHub sometimes coalesces a combined branch+tag push into a single run on
-    # the branch ref, so relying on event_name alone misses tag uploads.
-    if: github.ref_type == 'tag'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags')
     permissions:
-      contents: write
+      id-token: write
+    environment:
+      name: pypi
+      url: https://pypi.org/project/zotero-mcp-server/
     steps:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist/
-      - name: Attach artifacts to GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*
+      - uses: pypa/gh-action-pypi-publish@release/v1
 

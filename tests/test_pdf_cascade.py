@@ -1,9 +1,10 @@
 """Unit tests for the PDF attachment cascade (_try_unpaywall, _try_arxiv_from_crossref,
 _try_semantic_scholar, _try_pmc, _download_and_attach_pdf, _try_attach_oa_pdf)."""
 
+import json
+
 import pytest
 import requests
-from conftest import FakeZotero
 
 from zotero_mcp.server import (
     _download_and_attach_pdf,
@@ -13,16 +14,18 @@ from zotero_mcp.server import (
     _try_semantic_scholar,
     _try_unpaywall,
 )
+from conftest import DummyContext, FakeZotero
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-
 class _FakeHTTPResponse:
     """Minimal requests.Response stand-in."""
 
-    def __init__(self, status_code=200, json_data=None, content=b"", headers=None):
+    def __init__(self, status_code=200, json_data=None, content=b"",
+                 headers=None):
         self.status_code = status_code
         self._json = json_data
         self.content = content
@@ -50,14 +53,20 @@ class _AttachZotero(FakeZotero):
         self.attachments.append({"files": files, "parentid": parentid})
 
 
+def _allow_ssrf_guard(monkeypatch):
+    """Bypass the SSRF host check so a test can exercise download logic
+    (content-type / size) without depending on real DNS resolution."""
+    from zotero_mcp.tools import _helpers
+    monkeypatch.setattr(_helpers, "_url_resolves_to_public_host", lambda url: True)
+
+
 # ---------------------------------------------------------------------------
 # _try_unpaywall
 # ---------------------------------------------------------------------------
 
-
 class TestTryUnpaywall:
-    @pytest.mark.asyncio
-    async def test_unpaywall_best_location(self, monkeypatch, dummy_ctx):
+
+    def test_unpaywall_best_location(self, monkeypatch, dummy_ctx):
         """best_oa_location has url_for_pdf -> returns that URL."""
         payload = {
             "best_oa_location": {"url_for_pdf": "https://example.com/paper.pdf"},
@@ -68,11 +77,10 @@ class TestTryUnpaywall:
             return _FakeHTTPResponse(200, json_data=payload)
 
         monkeypatch.setattr(requests, "get", fake_get)
-        result = await _try_unpaywall("10.1234/test", dummy_ctx)
+        result = _try_unpaywall("10.1234/test", dummy_ctx)
         assert result == "https://example.com/paper.pdf"
 
-    @pytest.mark.asyncio
-    async def test_unpaywall_iterates_oa_locations(self, monkeypatch, dummy_ctx):
+    def test_unpaywall_iterates_oa_locations(self, monkeypatch, dummy_ctx):
         """best_oa_location has no url_for_pdf, fallback to oa_locations[1]."""
         payload = {
             "best_oa_location": {"url": "https://landing.example.com"},
@@ -86,11 +94,10 @@ class TestTryUnpaywall:
             return _FakeHTTPResponse(200, json_data=payload)
 
         monkeypatch.setattr(requests, "get", fake_get)
-        result = await _try_unpaywall("10.1234/test", dummy_ctx)
+        result = _try_unpaywall("10.1234/test", dummy_ctx)
         assert result == "https://alt.example.com/paper.pdf"
 
-    @pytest.mark.asyncio
-    async def test_unpaywall_no_oa(self, monkeypatch, dummy_ctx):
+    def test_unpaywall_no_oa(self, monkeypatch, dummy_ctx):
         """is_oa false, no locations -> returns None."""
         payload = {
             "is_oa": False,
@@ -102,18 +109,17 @@ class TestTryUnpaywall:
             return _FakeHTTPResponse(200, json_data=payload)
 
         monkeypatch.setattr(requests, "get", fake_get)
-        result = await _try_unpaywall("10.1234/closed", dummy_ctx)
+        result = _try_unpaywall("10.1234/closed", dummy_ctx)
         assert result is None
 
-    @pytest.mark.asyncio
-    async def test_unpaywall_timeout(self, monkeypatch, dummy_ctx):
+    def test_unpaywall_timeout(self, monkeypatch, dummy_ctx):
         """requests.get raises Timeout -> returns None gracefully."""
 
         def fake_get(url, **kwargs):
             raise requests.exceptions.Timeout("timed out")
 
         monkeypatch.setattr(requests, "get", fake_get)
-        result = await _try_unpaywall("10.1234/slow", dummy_ctx)
+        result = _try_unpaywall("10.1234/slow", dummy_ctx)
         assert result is None
 
 
@@ -121,27 +127,36 @@ class TestTryUnpaywall:
 # _try_arxiv_from_crossref
 # ---------------------------------------------------------------------------
 
-
 class TestTryArxivFromCrossref:
-    @pytest.mark.asyncio
-    async def test_arxiv_from_crossref_doi_format(self, dummy_ctx):
+
+    def test_arxiv_from_crossref_doi_format(self, dummy_ctx):
         """relation has-preprint with id-type 'doi' containing arXiv DOI."""
-        metadata = {"relation": {"has-preprint": [{"id-type": "doi", "id": "10.48550/arXiv.2307.02743"}]}}
-        result = await _try_arxiv_from_crossref(metadata, dummy_ctx)
+        metadata = {
+            "relation": {
+                "has-preprint": [
+                    {"id-type": "doi", "id": "10.48550/arXiv.2307.02743"}
+                ]
+            }
+        }
+        result = _try_arxiv_from_crossref(metadata, dummy_ctx)
         assert result == "https://arxiv.org/pdf/2307.02743.pdf"
 
-    @pytest.mark.asyncio
-    async def test_arxiv_from_crossref_arxiv_type(self, dummy_ctx):
+    def test_arxiv_from_crossref_arxiv_type(self, dummy_ctx):
         """relation has-preprint with id-type 'arxiv' and bare arXiv id."""
-        metadata = {"relation": {"has-preprint": [{"id-type": "arxiv", "id": "2307.02743"}]}}
-        result = await _try_arxiv_from_crossref(metadata, dummy_ctx)
+        metadata = {
+            "relation": {
+                "has-preprint": [
+                    {"id-type": "arxiv", "id": "2307.02743"}
+                ]
+            }
+        }
+        result = _try_arxiv_from_crossref(metadata, dummy_ctx)
         assert result == "https://arxiv.org/pdf/2307.02743.pdf"
 
-    @pytest.mark.asyncio
-    async def test_arxiv_from_crossref_no_relation(self, dummy_ctx):
+    def test_arxiv_from_crossref_no_relation(self, dummy_ctx):
         """No relation field at all -> returns None."""
         metadata = {"title": ["Some Paper"], "DOI": "10.1234/test"}
-        result = await _try_arxiv_from_crossref(metadata, dummy_ctx)
+        result = _try_arxiv_from_crossref(metadata, dummy_ctx)
         assert result is None
 
 
@@ -149,22 +164,22 @@ class TestTryArxivFromCrossref:
 # _try_semantic_scholar
 # ---------------------------------------------------------------------------
 
-
 class TestTrySemanticScholar:
-    @pytest.mark.asyncio
-    async def test_semantic_scholar_has_pdf(self, monkeypatch, dummy_ctx):
+
+    def test_semantic_scholar_has_pdf(self, monkeypatch, dummy_ctx):
         """S2 returns openAccessPdf with url -> returns that URL."""
-        payload = {"openAccessPdf": {"url": "https://s2.example.com/paper.pdf"}}
+        payload = {
+            "openAccessPdf": {"url": "https://s2.example.com/paper.pdf"}
+        }
 
         def fake_get(url, **kwargs):
             return _FakeHTTPResponse(200, json_data=payload)
 
         monkeypatch.setattr(requests, "get", fake_get)
-        result = await _try_semantic_scholar("10.1234/test", dummy_ctx)
+        result = _try_semantic_scholar("10.1234/test", dummy_ctx)
         assert result == "https://s2.example.com/paper.pdf"
 
-    @pytest.mark.asyncio
-    async def test_semantic_scholar_no_pdf(self, monkeypatch, dummy_ctx):
+    def test_semantic_scholar_no_pdf(self, monkeypatch, dummy_ctx):
         """S2 returns openAccessPdf: null -> returns None."""
         payload = {"openAccessPdf": None}
 
@@ -172,7 +187,7 @@ class TestTrySemanticScholar:
             return _FakeHTTPResponse(200, json_data=payload)
 
         monkeypatch.setattr(requests, "get", fake_get)
-        result = await _try_semantic_scholar("10.1234/closed", dummy_ctx)
+        result = _try_semantic_scholar("10.1234/closed", dummy_ctx)
         assert result is None
 
 
@@ -180,10 +195,9 @@ class TestTrySemanticScholar:
 # _try_pmc
 # ---------------------------------------------------------------------------
 
-
 class TestTryPmc:
-    @pytest.mark.asyncio
-    async def test_pmc_found(self, monkeypatch, dummy_ctx):
+
+    def test_pmc_found(self, monkeypatch, dummy_ctx):
         """NCBI converter returns pmcid -> returns PMC PDF URL."""
         payload = {"records": [{"pmcid": "PMC1234567"}]}
 
@@ -191,11 +205,10 @@ class TestTryPmc:
             return _FakeHTTPResponse(200, json_data=payload)
 
         monkeypatch.setattr(requests, "get", fake_get)
-        result = await _try_pmc("10.1234/test", dummy_ctx)
+        result = _try_pmc("10.1234/test", dummy_ctx)
         assert result == "https://pmc.ncbi.nlm.nih.gov/articles/PMC1234567/pdf/"
 
-    @pytest.mark.asyncio
-    async def test_pmc_no_pmcid(self, monkeypatch, dummy_ctx):
+    def test_pmc_no_pmcid(self, monkeypatch, dummy_ctx):
         """NCBI returns record without pmcid -> returns None."""
         payload = {"records": [{"doi": "10.1234/test"}]}
 
@@ -203,7 +216,7 @@ class TestTryPmc:
             return _FakeHTTPResponse(200, json_data=payload)
 
         monkeypatch.setattr(requests, "get", fake_get)
-        result = await _try_pmc("10.1234/test", dummy_ctx)
+        result = _try_pmc("10.1234/test", dummy_ctx)
         assert result is None
 
 
@@ -211,41 +224,104 @@ class TestTryPmc:
 # _download_and_attach_pdf
 # ---------------------------------------------------------------------------
 
-
 class TestDownloadAndAttachPdf:
-    @pytest.mark.asyncio
-    async def test_download_content_type_check(self, monkeypatch, dummy_ctx):
+
+    def test_download_content_type_check(self, monkeypatch, dummy_ctx):
         """Response with text/html content-type -> file NOT attached."""
         zot = _AttachZotero()
+        _allow_ssrf_guard(monkeypatch)
 
         def fake_get(url, **kwargs):
             return _FakeHTTPResponse(
-                200,
-                content=b"<html>Not a PDF</html>",
+                200, content=b"<html>Not a PDF</html>",
                 headers={"Content-Type": "text/html"},
             )
 
         monkeypatch.setattr(requests, "get", fake_get)
-        result = await _download_and_attach_pdf(zot, "ITEM1", "https://x.com/f.pdf", "10.1234/test", dummy_ctx)
-        assert result is False
+        result = _download_and_attach_pdf(zot, "ITEM1", "https://x.com/f.pdf",
+                                          "10.1234/test", dummy_ctx)
+        assert result is None
         assert len(zot.attachments) == 0
 
-    @pytest.mark.asyncio
-    async def test_download_too_small(self, monkeypatch, dummy_ctx):
+    def test_download_too_small(self, monkeypatch, dummy_ctx):
         """Response < 1000 bytes -> file NOT attached."""
         zot = _AttachZotero()
+        _allow_ssrf_guard(monkeypatch)
         tiny_content = b"%PDF-1.4 tiny"  # well under 1000 bytes
 
         def fake_get(url, **kwargs):
             return _FakeHTTPResponse(
-                200,
-                content=tiny_content,
+                200, content=tiny_content,
                 headers={"Content-Type": "application/pdf"},
             )
 
         monkeypatch.setattr(requests, "get", fake_get)
-        result = await _download_and_attach_pdf(zot, "ITEM1", "https://x.com/f.pdf", "10.1234/test", dummy_ctx)
-        assert result is False
+        result = _download_and_attach_pdf(zot, "ITEM1", "https://x.com/f.pdf",
+                                          "10.1234/test", dummy_ctx)
+        assert result is None
+        assert len(zot.attachments) == 0
+
+    # -- SSRF guard ---------------------------------------------------------
+
+    def test_download_rejects_loopback(self, monkeypatch, dummy_ctx):
+        """A URL resolving to loopback is rejected before any HTTP request."""
+        zot = _AttachZotero()
+        called = []
+        monkeypatch.setattr(requests, "get",
+                            lambda *a, **k: called.append(1))
+        result = _download_and_attach_pdf(
+            zot, "ITEM1", "http://127.0.0.1:23119/api/users/0", "10.1/x", dummy_ctx)
+        assert result is None
+        assert called == []          # guard short-circuits before requests.get
+        assert len(zot.attachments) == 0
+
+    def test_download_rejects_cloud_metadata(self, monkeypatch, dummy_ctx):
+        """The 169.254.169.254 cloud-metadata endpoint is rejected."""
+        zot = _AttachZotero()
+        called = []
+        monkeypatch.setattr(requests, "get", lambda *a, **k: called.append(1))
+        result = _download_and_attach_pdf(
+            zot, "ITEM1", "http://169.254.169.254/latest/meta-data/", "10.1/x", dummy_ctx)
+        assert result is None
+        assert called == []
+
+    def test_download_rejects_private_range(self, monkeypatch, dummy_ctx):
+        """An RFC1918 host is rejected."""
+        zot = _AttachZotero()
+        called = []
+        monkeypatch.setattr(requests, "get", lambda *a, **k: called.append(1))
+        result = _download_and_attach_pdf(
+            zot, "ITEM1", "http://10.0.0.5/secret.pdf", "10.1/x", dummy_ctx)
+        assert result is None
+        assert called == []
+
+    def test_download_rejects_non_http_scheme(self, monkeypatch, dummy_ctx):
+        """Non-http(s) schemes (file://, gopher://) are rejected."""
+        zot = _AttachZotero()
+        called = []
+        monkeypatch.setattr(requests, "get", lambda *a, **k: called.append(1))
+        for url in ("file:///etc/passwd", "gopher://127.0.0.1/x"):
+            assert _download_and_attach_pdf(zot, "ITEM1", url, "10.1/x", dummy_ctx) is None
+        assert called == []
+
+    def test_download_rejects_redirect_to_private(self, monkeypatch, dummy_ctx):
+        """A public URL that 302-redirects to a private host is rejected."""
+        from zotero_mcp.tools import _helpers
+
+        # First hop (public) passes the resolver; the redirect target is a
+        # literal loopback IP, which the guard rejects on re-validation.
+        monkeypatch.setattr(_helpers, "_url_resolves_to_public_host",
+                            lambda url: "evil.example" in url)
+
+        def fake_get(url, **kwargs):
+            return _FakeHTTPResponse(
+                302, headers={"Location": "http://127.0.0.1:23119/api"})
+
+        monkeypatch.setattr(requests, "get", fake_get)
+        result = _download_and_attach_pdf(
+            zot := _AttachZotero(), "ITEM1", "https://evil.example/p.pdf",
+            "10.1/x", dummy_ctx)
+        assert result is None
         assert len(zot.attachments) == 0
 
 
@@ -253,10 +329,9 @@ class TestDownloadAndAttachPdf:
 # _try_attach_oa_pdf (full cascade)
 # ---------------------------------------------------------------------------
 
-
 class TestTryAttachOaPdf:
-    @pytest.mark.asyncio
-    async def test_cascade_order(self, monkeypatch, dummy_ctx):
+
+    def test_cascade_order(self, monkeypatch, dummy_ctx):
         """All sources return None except PMC (last) -> cascade reaches it."""
         zot = _AttachZotero()
         doi = "10.1234/cascade"
@@ -267,24 +342,17 @@ class TestTryAttachOaPdf:
             call_log.append(url)
             # Unpaywall
             if "unpaywall.org" in url:
-                return _FakeHTTPResponse(
-                    200,
-                    json_data={
-                        "best_oa_location": None,
-                        "oa_locations": [],
-                    },
-                )
+                return _FakeHTTPResponse(200, json_data={
+                    "best_oa_location": None, "oa_locations": [],
+                })
             # Semantic Scholar
             if "semanticscholar.org" in url:
                 return _FakeHTTPResponse(200, json_data={"openAccessPdf": None})
             # NCBI ID converter -> return a PMCID
             if "ncbi.nlm.nih.gov/tools/idconv" in url:
-                return _FakeHTTPResponse(
-                    200,
-                    json_data={
-                        "records": [{"pmcid": "PMC9999999"}],
-                    },
-                )
+                return _FakeHTTPResponse(200, json_data={
+                    "records": [{"pmcid": "PMC9999999"}],
+                })
             # Actual PDF download from PMC URL
             if "pmc.ncbi.nlm.nih.gov/articles" in url:
                 return _FakeHTTPResponse(
@@ -295,26 +363,22 @@ class TestTryAttachOaPdf:
             return _FakeHTTPResponse(404)
 
         monkeypatch.setattr(requests, "get", fake_get)
-        result = await _try_attach_oa_pdf(zot, "ITEM1", doi, dummy_ctx, crossref_metadata=None)
+        result = _try_attach_oa_pdf(zot, "ITEM1", doi, dummy_ctx,
+                                    crossref_metadata=None)
         assert "PDF attached" in result
         assert "PubMed Central" in result
         assert len(zot.attachments) == 1
 
-    @pytest.mark.asyncio
-    async def test_cascade_all_fail(self, monkeypatch, dummy_ctx):
+    def test_cascade_all_fail(self, monkeypatch, dummy_ctx):
         """All sources return None -> message includes 'no open-access PDF found'."""
         zot = _AttachZotero()
 
         def fake_get(url, **kwargs):
             # Every API returns empty/no-match responses
             if "unpaywall.org" in url:
-                return _FakeHTTPResponse(
-                    200,
-                    json_data={
-                        "best_oa_location": None,
-                        "oa_locations": [],
-                    },
-                )
+                return _FakeHTTPResponse(200, json_data={
+                    "best_oa_location": None, "oa_locations": [],
+                })
             if "semanticscholar.org" in url:
                 return _FakeHTTPResponse(200, json_data={"openAccessPdf": None})
             if "ncbi.nlm.nih.gov" in url:
@@ -322,6 +386,7 @@ class TestTryAttachOaPdf:
             return _FakeHTTPResponse(404)
 
         monkeypatch.setattr(requests, "get", fake_get)
-        result = await _try_attach_oa_pdf(zot, "ITEM1", "10.1234/nope", dummy_ctx, crossref_metadata=None)
+        result = _try_attach_oa_pdf(zot, "ITEM1", "10.1234/nope", dummy_ctx,
+                                    crossref_metadata=None)
         assert "no open-access PDF found" in result
         assert len(zot.attachments) == 0

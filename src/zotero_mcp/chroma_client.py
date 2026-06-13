@@ -6,116 +6,54 @@ for semantic search over Zotero libraries.
 """
 
 import json
-import logging
 import os
-import random
-import threading
-import time
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
+import logging
 
 try:
     import chromadb
     from chromadb import Documents, EmbeddingFunction, Embeddings
     from chromadb.config import Settings
+    from chromadb.utils.embedding_functions import register_embedding_function
 except ImportError as e:
     raise ImportError(
-        "chromadb is required for semantic search. Install it with: pip install 'zotero-mcp-server[semantic]'"
+        "chromadb is required for semantic search. "
+        "Install it with: pip install 'zotero-mcp-server[semantic]'"
     ) from e
 
-from zotero_mcp.rate_limiter import rate_limit
 from zotero_mcp.utils import suppress_stdout
 
 logger = logging.getLogger(__name__)
-_DOTENV_LOADED = False
-
-def _load_dotenv_once() -> None:
-    global _DOTENV_LOADED
-    if _DOTENV_LOADED:
-        return
-    _DOTENV_LOADED = True
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv()
-    except Exception:
-        return
-
-def _get_persistent_windows_env(name: str) -> str | None:
-    """Read persistent Windows env vars when current process env is stale."""
-    if os.name != "nt":
-        return None
-    try:
-        import winreg
-    except ImportError:
-        return None
-
-    locations = (
-        (winreg.HKEY_CURRENT_USER, r"Environment"),
-        (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
-    )
-    for root, path in locations:
-        try:
-            with winreg.OpenKey(root, path) as key:
-                value, _ = winreg.QueryValueEx(key, name)
-        except OSError:
-            continue
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-def _get_env(name: str, default: str | None = None) -> str | None:
-    """Return env var, loading .env and then Windows user/machine env if needed."""
-    value = os.getenv(name)
-    if value:
-        return value
-    _load_dotenv_once()
-    value = os.getenv(name)
-    if value:
-        return value
-    return _get_persistent_windows_env(name) or default
 
 
+@register_embedding_function
 class OpenAIEmbeddingFunction(EmbeddingFunction):
-    """Custom OpenAI embedding function for ChromaDB."""
+    """Custom OpenAI embedding function for ChromaDB.
+
+    Registered under the name "openai" so ChromaDB rebuilds it (rather than its
+    own incompatible built-in of the same name) when reloading a persisted
+    collection's config. ChromaDB >=1.x reconstructs the embedding function by
+    name from the stored config during upsert; without registration the name
+    collides with the built-in, whose build_from_config rejects our
+    {model_name, base_url} config.
+    """
 
     max_input_tokens = 8000  # text-embedding-3-* limit is 8191
 
-    # Per-request input-list cap. OpenAI allows up to 2048 items but many
-    # OpenAI-compatible providers are stricter — SiliconFlow is 64 for
-    # `/v1/embeddings`, Mistral is 512, etc. Defaulting to 64 here keeps
-    # the code portable across providers; real OpenAI users can set
-    # `embedding_config.request_batch_size: 2048` to maximize throughput.
-    DEFAULT_REQUEST_BATCH_SIZE = 64
-
-    def __init__(
-        self,
-        model_name: str = "text-embedding-3-small",
-        api_key: str | None = None,
-        base_url: str | None = None,
-        request_batch_size: int | None = None,
-        rate_limit_rps: float | None = None,
-    ):
-        import threading as _threading
-
+    def __init__(self, model_name: str = "text-embedding-3-small", api_key: str | None = None, base_url: str | None = None):
         self.model_name = model_name
-        self.api_key = api_key or _get_env("OPENAI_API_KEY")
-        self.base_url = base_url or _get_env("OPENAI_BASE_URL")
-        self.request_batch_size = int(request_batch_size) if request_batch_size else self.DEFAULT_REQUEST_BATCH_SIZE
-        self.rate_limit_rps: float | None = float(rate_limit_rps) if rate_limit_rps else None
-        self._rate_lock = _threading.Lock()
-        self._last_request_ts: float = 0.0
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.base_url = base_url or os.getenv("OPENAI_BASE_URL")
         if not self.api_key:
             raise ValueError("OpenAI API key is required")
 
         try:
             import openai
-
-            client_kwargs: dict[str, Any] = {"api_key": self.api_key}
+            client_kwargs = {"api_key": self.api_key}
             if self.base_url:
                 client_kwargs["base_url"] = self.base_url
             self.client = openai.OpenAI(**client_kwargs)
-            self.rate_limited = True
         except ImportError:
             raise ImportError("openai package is required for OpenAI embeddings")
 
@@ -124,12 +62,7 @@ class OpenAIEmbeddingFunction(EmbeddingFunction):
         return "openai"
 
     def get_config(self) -> dict[str, Any]:
-        return {
-            "model_name": self.model_name,
-            "base_url": self.base_url,
-            "request_batch_size": self.request_batch_size,
-            "rate_limit_rps": self.rate_limit_rps,
-        }
+        return {"model_name": self.model_name, "base_url": self.base_url}
 
     @staticmethod
     def build_from_config(config: dict[str, Any]) -> "OpenAIEmbeddingFunction":
@@ -137,71 +70,25 @@ class OpenAIEmbeddingFunction(EmbeddingFunction):
             model_name=config.get("model_name", "text-embedding-3-small"),
             api_key=config.get("api_key"),
             base_url=config.get("base_url"),
-            request_batch_size=config.get("request_batch_size"),
-            rate_limit_rps=config.get("rate_limit_rps"),
         )
 
-    def _wait_for_rate_limit(self) -> None:
-        """Sleep as needed so successive HTTP requests stay under `rate_limit_rps`.
-
-        Applied at the individual HTTP request level (including each
-        sub-batch) so rate-limited providers see a steady request cadence
-        regardless of how many inputs the caller passed. The lock keeps
-        parallel threads (e.g. the pre-search fire-and-forget sync)
-        honest.
-        """
-        rps = self.rate_limit_rps
-        if not rps or rps <= 0:
-            return
-        import time as _t
-
-        with self._rate_lock:
-            now = _t.monotonic()
-            min_interval = 1.0 / rps
-            wait = min_interval - (now - self._last_request_ts)
-            if wait > 0:
-                _t.sleep(wait)
-            self._last_request_ts = _t.monotonic()
-
     def __call__(self, input: Documents) -> Embeddings:
-        """Generate embeddings, sub-batching + rate-limiting each request.
-
-        Upstream callers (e.g. `_process_item_batch`) may pass more items
-        than the provider accepts in a single POST. We split into
-        `request_batch_size` slices and concatenate the resulting vectors.
-        Return order matches input order.
-        """
-        if not input:
-            return []
-        batch_size = self.request_batch_size or self.DEFAULT_REQUEST_BATCH_SIZE
-        if len(input) <= batch_size:
-            self._wait_for_rate_limit()
-            response = self.client.embeddings.create(
-                model=self.model_name,
-                input=input,
-            )
-            return cast(Embeddings, [data.embedding for data in response.data])
-        vecs: list = []
-        for i in range(0, len(input), batch_size):
-            sub = input[i : i + batch_size]
-            self._wait_for_rate_limit()
-            response = self.client.embeddings.create(
-                model=self.model_name,
-                input=sub,
-            )
-            vecs.extend(data.embedding for data in response.data)
-        return cast(Embeddings, vecs)
+        """Generate embeddings using OpenAI API."""
+        response = self.client.embeddings.create(
+            model=self.model_name,
+            input=input
+        )
+        return [data.embedding for data in response.data]
 
     def embed_query(self, text: str) -> list[float]:
         """Embed a query string. No special handling needed for OpenAI."""
-        return cast(list[float], self.__call__([text])[0])
+        return self.__call__([text])[0]
 
     def truncate(self, text: str, max_tokens: int) -> str:
         """Truncate using tiktoken cl100k_base (correct for OpenAI models)."""
         try:
             import tiktoken
-
-            if not hasattr(self, "_tokenizer"):
+            if not hasattr(self, '_tokenizer'):
                 self._tokenizer = tiktoken.get_encoding("cl100k_base")
             tokens = self._tokenizer.encode(text, disallowed_special=())
             if len(tokens) > max_tokens:
@@ -214,45 +101,13 @@ class OpenAIEmbeddingFunction(EmbeddingFunction):
         return text
 
 
-class OpenRouterEmbeddingFunction(OpenAIEmbeddingFunction):
-    """OpenRouter embedding function using the OpenAI-compatible API."""
-
-    DEFAULT_MODEL_NAME = "openai/text-embedding-3-small"
-    DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
-
-    def __init__(
-        self,
-        model_name: str = DEFAULT_MODEL_NAME,
-        api_key: str | None = None,
-        base_url: str | None = None,
-        request_batch_size: int | None = None,
-        rate_limit_rps: float | None = None,
-    ):
-        super().__init__(
-            model_name=model_name,
-            api_key=api_key or _get_env("OPENROUTER_API_KEY"),
-            base_url=base_url or _get_env("OPENROUTER_BASE_URL") or self.DEFAULT_BASE_URL,
-            request_batch_size=request_batch_size,
-            rate_limit_rps=rate_limit_rps,
-        )
-
-    @staticmethod
-    def name() -> str:
-        return "openrouter"
-
-    @staticmethod
-    def build_from_config(config: dict[str, Any]) -> "OpenRouterEmbeddingFunction":
-        return OpenRouterEmbeddingFunction(
-            model_name=config.get("model_name", OpenRouterEmbeddingFunction.DEFAULT_MODEL_NAME),
-            api_key=config.get("api_key"),
-            base_url=config.get("base_url"),
-            request_batch_size=config.get("request_batch_size"),
-            rate_limit_rps=config.get("rate_limit_rps"),
-        )
-
-
+@register_embedding_function
 class GeminiEmbeddingFunction(EmbeddingFunction):
-    """Custom Gemini embedding function for ChromaDB using google-genai."""
+    """Custom Gemini embedding function for ChromaDB using google-genai.
+
+    Registered under the name "gemini" so ChromaDB can rebuild it from a
+    persisted collection's config (see OpenAIEmbeddingFunction for details).
+    """
 
     # gemini-embedding-2-* models ignore the task_type config field (the API
     # silently drops it). Google's recommended alternative is to embed the
@@ -278,17 +133,8 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
     # v2 models this value means "effective budget for the TEXT BODY" —
     # prefix tokens are reserved separately (see V2_PREFIX_TOKEN_BUDGET).
     max_input_tokens = 2000
-    DEFAULT_OUTPUT_DIMENSIONALITY = 768
-    DEFAULT_MAX_RETRIES = 6
 
-    def __init__(
-        self,
-        model_name: str = "gemini-embedding-001",
-        api_key: str | None = None,
-        base_url: str | None = None,
-        output_dimensionality: int | None = None,
-        max_retries: int | None = None,
-    ):
+    def __init__(self, model_name: str = "gemini-embedding-001", api_key: str | None = None, base_url: str | None = None):
         self.model_name = model_name
         # Model-aware token limit. For v2 models, derive from:
         #   hard_cap (8192) - safety_margin (192, for char-based truncation
@@ -299,34 +145,20 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
         # truncation limit, formally closing the cap-enforcement gap.
         if "gemini-embedding-2" in model_name:
             self.max_input_tokens = 8000 - self.V2_PREFIX_TOKEN_BUDGET
-        self.api_key = api_key or _get_env("GEMINI_API_KEY") or _get_env("GOOGLE_API_KEY")
-        self.base_url = base_url or _get_env("GEMINI_BASE_URL")
-        self.output_dimensionality = self._normalize_optional_int(
-            output_dimensionality or _get_env("GEMINI_OUTPUT_DIMENSIONALITY"),
-            default=self.DEFAULT_OUTPUT_DIMENSIONALITY,
-            minimum=1,
-            maximum=3072,
-        )
-        self.max_retries = self._normalize_int(
-            max_retries or _get_env("GEMINI_MAX_RETRIES"),
-            default=self.DEFAULT_MAX_RETRIES,
-            minimum=0,
-            maximum=12,
-        )
+        self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        self.base_url = base_url or os.getenv("GEMINI_BASE_URL")
         if not self.api_key:
             raise ValueError("Gemini API key is required")
 
         try:
             from google import genai
             from google.genai import types
-
-            client_kwargs_genai: dict[str, Any] = {"api_key": self.api_key}
+            client_kwargs = {"api_key": self.api_key}
             if self.base_url:
-                http_options = types.HttpOptions(base_url=self.base_url)  # type: ignore[call-arg]
-                client_kwargs_genai["http_options"] = http_options
-            self.client = genai.Client(**client_kwargs_genai)
+                http_options = types.HttpOptions(baseUrl=self.base_url)
+                client_kwargs["http_options"] = http_options
+            self.client = genai.Client(**client_kwargs)
             self.types = types
-            self.rate_limited = True
         except ImportError:
             raise ImportError("google-genai package is required for Gemini embeddings")
 
@@ -335,12 +167,7 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
         return "gemini"
 
     def get_config(self) -> dict[str, Any]:
-        return {
-            "model_name": self.model_name,
-            "base_url": self.base_url,
-            "output_dimensionality": self.output_dimensionality,
-            "max_retries": self.max_retries,
-        }
+        return {"model_name": self.model_name, "base_url": self.base_url}
 
     @staticmethod
     def build_from_config(config: dict[str, Any]) -> "GeminiEmbeddingFunction":
@@ -348,8 +175,6 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
             model_name=config.get("model_name", "gemini-embedding-001"),
             api_key=config.get("api_key"),
             base_url=config.get("base_url"),
-            output_dimensionality=config.get("output_dimensionality"),
-            max_retries=config.get("max_retries"),
         )
 
     # Gemini's embed_content API caps at 100 items per batch (verified
@@ -357,98 +182,11 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
     # "at most 100 requests can be in one batch").
     GEMINI_MAX_BATCH = 100
 
-    @staticmethod
-    def _normalize_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
-        try:
-            parsed = int(value) if value is not None else default
-        except (TypeError, ValueError):
-            parsed = default
-        return max(minimum, min(maximum, parsed))
-
-    @staticmethod
-    def _normalize_optional_int(
-        value: Any,
-        *,
-        default: int | None,
-        minimum: int,
-        maximum: int,
-    ) -> int | None:
-        if value is None:
-            return default
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            return default
-        return max(minimum, min(maximum, parsed))
-
     def _is_v2(self) -> bool:
         # gemini-embedding-2-* does not support the task_type config field
         # (it is silently ignored by the API). Google's guidance is to put
         # the task hint in the prompt text instead.
         return "gemini-embedding-2" in self.model_name
-
-    @staticmethod
-    def _is_rate_limit_error(error: Exception) -> bool:
-        status_code = getattr(error, "status_code", None) or getattr(error, "code", None)
-        if status_code in (429, 503):
-            return True
-        response = getattr(error, "response", None)
-        if getattr(response, "status_code", None) in (429, 503):
-            return True
-        message = str(error).lower()
-        return "429" in message or "503" in message or "too many requests" in message or "rate limit" in message
-
-    @staticmethod
-    def _retry_after_seconds(error: Exception) -> float | None:
-        from email.utils import parsedate_to_datetime
-
-        response = getattr(error, "response", None)
-        headers = getattr(response, "headers", {}) or {}
-        value = headers.get("Retry-After") or headers.get("retry-after")
-        if not value:
-            return None
-        try:
-            return max(0.0, float(value))
-        except ValueError:
-            pass
-        try:
-            return max(0.0, parsedate_to_datetime(value).timestamp() - time.time())
-        except Exception:
-            return None
-
-    def _embed_config(self, *, task_type: str | None = None, title: str | None = None) -> Any | None:
-        kwargs: dict[str, Any] = {}
-        if task_type:
-            kwargs["task_type"] = task_type
-        if title:
-            kwargs["title"] = title
-        if getattr(self, "output_dimensionality", None):
-            kwargs["output_dimensionality"] = self.output_dimensionality
-        if not kwargs:
-            return None
-        return self.types.EmbedContentConfig(**kwargs)
-
-    def _embed_content_with_backoff(self, **kwargs: Any) -> Any:
-        attempt = 0
-        while True:
-            if getattr(self, "rate_limited", True):
-                rate_limit("gemini")
-            try:
-                return self.client.models.embed_content(**kwargs)
-            except Exception as e:
-                if not self._is_rate_limit_error(e):
-                    raise
-                wait = self._retry_after_seconds(e)
-                if wait is None:
-                    capped_attempt = min(attempt, 2)
-                    wait = min(90.0, 30.0 * (2**capped_attempt)) + random.uniform(0.0, 3.0)
-                logger.warning(
-                    "Gemini rate limit hit; waiting %.1fs before retry %s",
-                    wait,
-                    attempt + 1,
-                )
-                time.sleep(wait)
-                attempt += 1
 
     def __call__(self, input: Documents) -> Embeddings:
         """Generate embeddings using Gemini API, batching up to 100 per call."""
@@ -466,21 +204,17 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
 
         embeddings: list = []
         for start in range(0, len(prepared), self.GEMINI_MAX_BATCH):
-            batch = prepared[start : start + self.GEMINI_MAX_BATCH]
+            batch = prepared[start:start + self.GEMINI_MAX_BATCH]
             if is_v2:
-                config = self._embed_config()
-                kwargs: dict[str, Any] = dict(
+                response = self.client.models.embed_content(
                     model=self.model_name,
                     contents=batch,
                 )
-                if config is not None:
-                    kwargs["config"] = config
-                response = self._embed_content_with_backoff(**kwargs)
             else:
-                response = self._embed_content_with_backoff(
+                response = self.client.models.embed_content(
                     model=self.model_name,
                     contents=batch,
-                    config=self._embed_config(
+                    config=self.types.EmbedContentConfig(
                         task_type="retrieval_document",
                         title="Zotero library document",
                     ),
@@ -499,19 +233,15 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
         text = self.truncate(text, self.max_input_tokens)
         if self._is_v2():
             prompt_text = f"{self.V2_QUERY_PREFIX}{text}"
-            config = self._embed_config()
-            kwargs = dict(
+            response = self.client.models.embed_content(
                 model=self.model_name,
                 contents=[prompt_text],
             )
-            if config is not None:
-                kwargs["config"] = config
-            response = self._embed_content_with_backoff(**kwargs)
         else:
-            response = self._embed_content_with_backoff(
+            response = self.client.models.embed_content(
                 model=self.model_name,
                 contents=[text],
-                config=self._embed_config(
+                config=self.types.EmbedContentConfig(
                     task_type="retrieval_query",
                 ),
             )
@@ -525,314 +255,24 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
         return text
 
 
-class VoyageEmbeddingFunction(EmbeddingFunction):
-    """Custom Voyage AI embedding function for ChromaDB."""
-
-    max_input_tokens = 8000
-    DEFAULT_MODEL_NAME = "voyage-4-lite"
-    VOYAGE_MAX_BATCH = 16
-    DEFAULT_TOKENS_PER_MINUTE = 10_000
-    DEFAULT_MAX_RETRIES = 8
-    DEFAULT_OUTPUT_DIMENSION = 512
-    _BASE_URL = "https://api.voyageai.com/v1/embeddings"
-    _TOKEN_LOCK = threading.Lock()
-    _TOKEN_WINDOW_STARTED = 0.0
-    _TOKEN_WINDOW_USED = 0
-
-    def __init__(
-        self,
-        model_name: str = DEFAULT_MODEL_NAME,
-        api_key: str | None = None,
-        base_url: str | None = None,
-        request_batch_size: int | None = None,
-        max_retries: int | None = None,
-        tokens_per_minute: int | None = None,
-        output_dimension: int | None = None,
-    ):
-        self.model_name = model_name
-        self.api_key = api_key or _get_env("VOYAGE_API_KEY")
-        self.base_url = base_url or _get_env("VOYAGE_BASE_URL") or self._BASE_URL
-        configured_batch_size = request_batch_size if request_batch_size is not None else _get_env("VOYAGE_REQUEST_BATCH_SIZE")
-        self.request_batch_size = self._normalize_int(
-            configured_batch_size,
-            default=self.VOYAGE_MAX_BATCH,
-            minimum=1,
-            maximum=128,
-        )
-        configured_retries = max_retries if max_retries is not None else _get_env("VOYAGE_MAX_RETRIES")
-        self.max_retries = self._normalize_int(
-            configured_retries,
-            default=self.DEFAULT_MAX_RETRIES,
-            minimum=0,
-            maximum=12,
-        )
-        self.tokens_per_minute = self._normalize_int(
-            tokens_per_minute if tokens_per_minute is not None else _get_env("VOYAGE_TOKENS_PER_MINUTE"),
-            default=self._default_tokens_per_minute(model_name),
-            minimum=1_000,
-            maximum=100_000_000,
-        )
-        configured_output_dimension = output_dimension if output_dimension is not None else _get_env("VOYAGE_OUTPUT_DIMENSION")
-        self.output_dimension = self._normalize_optional_int(
-            configured_output_dimension,
-            default=self.DEFAULT_OUTPUT_DIMENSION,
-            allowed={256, 512, 1024, 2048},
-        )
-        if not self.api_key:
-            raise ValueError("Voyage API key is required")
-        self.client = self._create_client()
-
-    @staticmethod
-    def name() -> str:
-        return "voyage"
-
-    def get_config(self) -> dict[str, Any]:
-        return {
-            "model_name": self.model_name,
-            "base_url": self.base_url,
-            "request_batch_size": self.request_batch_size,
-            "max_retries": self.max_retries,
-            "tokens_per_minute": self.tokens_per_minute,
-            "output_dimension": self.output_dimension,
-        }
-
-    @staticmethod
-    def build_from_config(config: dict[str, Any]) -> "VoyageEmbeddingFunction":
-        return VoyageEmbeddingFunction(
-            model_name=config.get("model_name", VoyageEmbeddingFunction.DEFAULT_MODEL_NAME),
-            api_key=config.get("api_key"),
-            base_url=config.get("base_url"),
-            request_batch_size=config.get("request_batch_size"),
-            max_retries=config.get("max_retries"),
-            tokens_per_minute=config.get("tokens_per_minute"),
-            output_dimension=config.get("output_dimension"),
-        )
-
-    @staticmethod
-    def _normalize_int(value: Any, *, default: int, minimum: int, maximum: int) -> int:
-        try:
-            parsed = int(value) if value is not None else default
-        except (TypeError, ValueError):
-            parsed = default
-        return max(minimum, min(maximum, parsed))
-
-    @staticmethod
-    def _normalize_optional_int(value: Any, *, default: int | None, allowed: set[int]) -> int | None:
-        if value is None:
-            return default
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            return default
-        return parsed if parsed in allowed else default
-
-    @staticmethod
-    def _default_tokens_per_minute(model_name: str) -> int:
-        # Default to Voyage's tier-0 project limit. The published model table
-        # applies after billing unlocks standard limits; free projects can be
-        # much lower even when the model has remaining free-token quota.
-        return VoyageEmbeddingFunction.DEFAULT_TOKENS_PER_MINUTE
-
-    def _create_client(self) -> Any:
-        try:
-            import voyageai
-        except ImportError as e:
-            raise ImportError(
-                "voyageai package is required for Voyage embeddings. "
-                "Install it with: pip install 'zotero-mcp-server[semantic]'"
-            ) from e
-
-        client_kwargs: dict[str, Any] = {"api_key": self.api_key}
-        if self.base_url and self.base_url != self._BASE_URL:
-            client_kwargs["base_url"] = self.base_url
-        try:
-            return voyageai.Client(**client_kwargs)  # type: ignore[attr-defined]
-        except TypeError:
-            # Older clients may not accept custom base_url. Prefer a working
-            # official client over failing setup for users on the default API.
-            client_kwargs.pop("base_url", None)
-            return voyageai.Client(**client_kwargs)  # type: ignore[attr-defined]
-
-    def _estimate_tokens(self, texts: list[str]) -> int:
-        try:
-            return max(1, int(self.client.count_tokens(texts, model=self.model_name)))
-        except TypeError:
-            try:
-                return max(1, int(self.client.count_tokens(texts)))
-            except Exception:
-                pass
-        except Exception:
-            pass
-        # Conservative for mixed Indonesian/English text; Voyage documents
-        # recommend count_tokens(); fall back if the local tokenizer is absent.
-        return max(1, sum(max(1, len(text) // 3) for text in texts))
-
-    def _iter_request_batches(self, texts: list[str]) -> list[list[str]]:
-        """Split by both item count and token budget.
-
-        Tier-0 Voyage projects allow only 10k TPM. Sending a single oversized
-        request can 429 even if we wait perfectly, so keep each request under a
-        conservative per-request slice of the minute budget.
-        """
-        if not texts:
-            return []
-        max_batch_tokens = max(1_000, int(self.tokens_per_minute * 0.8))
-        batches: list[list[str]] = []
-        current: list[str] = []
-        current_tokens = 0
-
-        for text in texts:
-            estimated = self._estimate_tokens([text])
-            if current and (len(current) >= self.request_batch_size or current_tokens + estimated > max_batch_tokens):
-                batches.append(current)
-                current = []
-                current_tokens = 0
-            current.append(text)
-            current_tokens += estimated
-
-        if current:
-            batches.append(current)
-        return batches
-
-    def _wait_for_token_budget(self, estimated_tokens: int) -> None:
-        while True:
-            with self._TOKEN_LOCK:
-                now = time.monotonic()
-                if now - self._TOKEN_WINDOW_STARTED >= 60:
-                    self.__class__._TOKEN_WINDOW_STARTED = now
-                    self.__class__._TOKEN_WINDOW_USED = 0
-
-                if self._TOKEN_WINDOW_USED + estimated_tokens <= self.tokens_per_minute or self._TOKEN_WINDOW_USED == 0:
-                    self.__class__._TOKEN_WINDOW_USED += estimated_tokens
-                    return
-
-                wait = max(0.5, 60 - (now - self._TOKEN_WINDOW_STARTED))
-
-            logger.info(
-                "Voyage token budget reached (%s/%s est tokens); waiting %.1fs",
-                self._TOKEN_WINDOW_USED,
-                self.tokens_per_minute,
-                wait,
-            )
-            time.sleep(wait)
-
-    def _cool_down_after_429(self) -> None:
-        with self._TOKEN_LOCK:
-            self.__class__._TOKEN_WINDOW_STARTED = time.monotonic()
-            self.__class__._TOKEN_WINDOW_USED = self.tokens_per_minute
-
-    def _reset_token_budget(self) -> None:
-        with self._TOKEN_LOCK:
-            self.__class__._TOKEN_WINDOW_STARTED = time.monotonic()
-            self.__class__._TOKEN_WINDOW_USED = 0
-
-    @staticmethod
-    def _retry_after_seconds(response: Any) -> float | None:
-        from email.utils import parsedate_to_datetime
-
-        headers = getattr(response, "headers", {}) or {}
-        value = headers.get("Retry-After") or headers.get("Backoff")
-        if not value:
-            return None
-        try:
-            return max(0.0, float(value))
-        except ValueError:
-            pass
-        try:
-            return max(0.0, parsedate_to_datetime(value).timestamp() - time.time())
-        except Exception:
-            return None
-
-    @staticmethod
-    def _is_rate_limit_error(error: Exception) -> bool:
-        status_code = getattr(error, "status_code", None)
-        if status_code == 429:
-            return True
-        response = getattr(error, "response", None)
-        if getattr(response, "status_code", None) == 429:
-            return True
-        message = str(error).lower()
-        return "429" in message or "too many requests" in message or "rate limit" in message
-
-    def _embed_batch_with_backoff(
-        self,
-        batch: list[str],
-        input_type: str,
-        estimated_tokens: int,
-    ) -> list[list[float]]:
-        attempt = 0
-        while True:
-            self._wait_for_token_budget(estimated_tokens)
-            rate_limit("voyage")
-            try:
-                kwargs: dict[str, Any] = {
-                    "model": self.model_name,
-                    "input_type": input_type,
-                }
-                if self.output_dimension is not None:
-                    kwargs["output_dimension"] = self.output_dimension
-                return self.client.embed(batch, **kwargs).embeddings
-            except Exception as e:
-                if not self._is_rate_limit_error(e):
-                    raise
-
-                self._cool_down_after_429()
-                wait = self._retry_after_seconds(getattr(e, "response", None))
-                if wait is None:
-                    capped_attempt = min(attempt, 1)
-                    wait = min(90.0, 60.0 * (2**capped_attempt)) + random.uniform(0.0, 3.0)
-                logger.warning(
-                    "Voyage rate limit hit; waiting %.1fs before retry %s",
-                    wait,
-                    attempt + 1,
-                )
-                time.sleep(wait)
-                self._reset_token_budget()
-                attempt += 1
-
-    def _embed(self, texts: list[str], input_type: str) -> list[list[float]]:
-        embeddings: list[list[float]] = []
-        for batch in self._iter_request_batches(texts):
-            estimated_tokens = self._estimate_tokens(batch)
-            embeddings.extend(self._embed_batch_with_backoff(batch, input_type, estimated_tokens))
-        return embeddings
-
-    def __call__(self, input: Documents) -> Embeddings:
-        """Generate document embeddings using Voyage AI."""
-        return cast(Embeddings, self._embed(list(input), input_type="document"))
-
-    def embed_query(self, text: str) -> list[float]:
-        """Embed a query string using Voyage's query input type."""
-        text = self.truncate(text, self.max_input_tokens)
-        return self._embed([text], input_type="query")[0]
-
-    def truncate(self, text: str, max_tokens: int) -> str:
-        """Truncate with a conservative character estimate."""
-        max_chars = max_tokens * 4
-        if len(text) > max_chars:
-            text = text[:max_chars]
-        return text
-
-
+@register_embedding_function
 class HuggingFaceEmbeddingFunction(EmbeddingFunction):
-    """Custom HuggingFace embedding function for ChromaDB using sentence-transformers."""
+    """Custom HuggingFace embedding function for ChromaDB using sentence-transformers.
+
+    Registered under the name "huggingface" so ChromaDB rebuilds it (rather than
+    its own incompatible built-in of the same name) when reloading a persisted
+    collection's config (see OpenAIEmbeddingFunction for details).
+    """
 
     def __init__(self, model_name: str = "Qwen/Qwen3-Embedding-0.6B"):
         self.model_name = model_name
-        model_name_lower = model_name.lower()
-        self._query_prefix = "query: " if "e5" in model_name_lower else ""
-        self._document_prefix = "passage: " if "e5" in model_name_lower else ""
-        self._normalize_embeddings = "e5" in model_name_lower
 
         try:
             from sentence_transformers import SentenceTransformer
-
             logger.info(f"Loading embedding model: {model_name}")
             self.model = SentenceTransformer(model_name, trust_remote_code=True)
         except ImportError:
-            raise ImportError(
-                "sentence-transformers package is required for HuggingFace embeddings. Install with: pip install sentence-transformers"
-            )
+            raise ImportError("sentence-transformers package is required for HuggingFace embeddings. Install with: pip install sentence-transformers")
 
         # Read limit from model metadata; conservative fallback
         self.max_input_tokens = getattr(self.model, "max_seq_length", 500)
@@ -852,27 +292,16 @@ class HuggingFaceEmbeddingFunction(EmbeddingFunction):
 
     def __call__(self, input: Documents) -> Embeddings:
         """Generate embeddings using HuggingFace model."""
-        texts = [f"{self._document_prefix}{text}" for text in input]
-        embeddings = self.model.encode(
-            texts,
-            convert_to_numpy=True,
-            normalize_embeddings=self._normalize_embeddings,
-        )
+        embeddings = self.model.encode(input, convert_to_numpy=True)
         return embeddings.tolist()
 
     def embed_query(self, text: str) -> list[float]:
-        """Embed a query string."""
-        text = f"{self._query_prefix}{text}"
-        embeddings = self.model.encode(
-            [text],
-            convert_to_numpy=True,
-            normalize_embeddings=self._normalize_embeddings,
-        )
-        return embeddings.tolist()[0]
+        """Embed a query string. No special handling needed for HuggingFace."""
+        return self.__call__([text])[0]
 
     def truncate(self, text: str, max_tokens: int) -> str:
         """Truncate using the model's own tokenizer."""
-        tokenizer = getattr(self.model, "tokenizer", None)
+        tokenizer = getattr(self.model, 'tokenizer', None)
         if tokenizer is not None:
             encoded = tokenizer.encode(text, add_special_tokens=False)
             if len(encoded) > max_tokens:
@@ -888,20 +317,18 @@ class HuggingFaceEmbeddingFunction(EmbeddingFunction):
 class ChromaClient:
     """ChromaDB client for Zotero semantic search."""
 
-    def __init__(
-        self,
-        collection_name: str = "zotero_library",
-        persist_directory: str | None = None,
-        embedding_model: str = "default",
-        embedding_config: dict[str, Any] | None = None,
-    ):
+    def __init__(self,
+                 collection_name: str = "zotero_library",
+                 persist_directory: str | None = None,
+                 embedding_model: str = "default",
+                 embedding_config: dict[str, Any] | None = None):
         """
         Initialize ChromaDB client.
 
         Args:
             collection_name: Name of the ChromaDB collection
             persist_directory: Directory to persist the database
-            embedding_model: Model to use for embeddings ('default', 'openai', 'gemini', 'voyage', 'qwen', 'embeddinggemma', or HuggingFace model name)
+            embedding_model: Model to use for embeddings ('default', 'openai', 'gemini', 'qwen', 'embeddinggemma', or HuggingFace model name)
             embedding_config: Configuration for the embedding model
         """
         self.collection_name = collection_name
@@ -920,7 +347,11 @@ class ChromaClient:
         # Initialize ChromaDB client with stdout suppression
         with suppress_stdout():
             self.client = chromadb.PersistentClient(
-                path=self.persist_directory, settings=Settings(anonymized_telemetry=False, allow_reset=True)
+                path=self.persist_directory,
+                settings=Settings(
+                    anonymized_telemetry=False,
+                    allow_reset=True
+                )
             )
 
             # Set up embedding function
@@ -931,25 +362,25 @@ class ChromaClient:
             # will have stale config.  Detect the mismatch and drop/recreate.
             try:
                 self.collection = self.client.get_or_create_collection(
-                    name=self.collection_name, embedding_function=self.embedding_function
+                    name=self.collection_name,
+                    embedding_function=self.embedding_function
                 )
 
                 # ChromaDB may silently persist the old embedding function config.
                 # Check if the stored config matches what we want; if not, recreate.
-                stored_config = getattr(self.collection, "metadata", {}) or {}
+                stored_config = getattr(self.collection, 'metadata', {}) or {}
                 if not stored_config:
                     # Try reading config from the collection's config_json_str
                     try:
                         import json as _json
-
                         rows = self.client._sysdb.get_collections(name=self.collection_name)
                         if rows:
-                            raw = getattr(rows[0], "config_json_str", None) or "{}"
+                            raw = getattr(rows[0], 'config_json_str', None) or '{}'
                             cfg = _json.loads(raw)
-                            ef_cfg = cfg.get("embedding_function", {}).get("config", {})
-                            stored_model = ef_cfg.get("model_name", "")
+                            ef_cfg = cfg.get('embedding_function', {}).get('config', {})
+                            stored_model = ef_cfg.get('model_name', '')
                             # Compare stored model with configured model
-                            configured_model = getattr(self.embedding_function, "model_name", None)
+                            configured_model = getattr(self.embedding_function, 'model_name', None)
                             if stored_model and configured_model and stored_model != configured_model:
                                 logger.warning(
                                     f"Stored embedding model '{stored_model}' differs from "
@@ -957,7 +388,8 @@ class ChromaClient:
                                 )
                                 self.client.delete_collection(name=self.collection_name)
                                 self.collection = self.client.create_collection(
-                                    name=self.collection_name, embedding_function=self.embedding_function
+                                    name=self.collection_name,
+                                    embedding_function=self.embedding_function
                                 )
                     except Exception:
                         pass  # Best-effort check; proceed with existing collection
@@ -965,11 +397,13 @@ class ChromaClient:
             except Exception as e:
                 if "embedding function conflict" in str(e).lower():
                     logger.warning(
-                        f"Embedding model changed to '{self.embedding_model}'. Resetting collection for rebuild."
+                        f"Embedding model changed to '{self.embedding_model}'. "
+                        "Resetting collection for rebuild."
                     )
                     self.client.delete_collection(name=self.collection_name)
                     self.collection = self.client.create_collection(
-                        name=self.collection_name, embedding_function=self.embedding_function
+                        name=self.collection_name,
+                        embedding_function=self.embedding_function
                     )
                 else:
                     raise
@@ -980,72 +414,13 @@ class ChromaClient:
             model_name = self.embedding_config.get("model_name", "text-embedding-3-small")
             api_key = self.embedding_config.get("api_key")
             base_url = self.embedding_config.get("base_url")
-            request_batch_size = self.embedding_config.get("request_batch_size")
-            # Pull the rate limit from the outer semantic_search config if
-            # present (preferred), with a fallback to embedding_config for
-            # users who scope it per-provider.
-            rate_limit_rps = (
-                self.embedding_config.get("rate_limit_rps")
-                if self.embedding_config.get("rate_limit_rps") is not None
-                else self.embedding_config.get("_semantic_rate_limit_rps")
-            )
-            return OpenAIEmbeddingFunction(
-                model_name=model_name,
-                api_key=api_key,
-                base_url=base_url,
-                request_batch_size=request_batch_size,
-                rate_limit_rps=rate_limit_rps,
-            )
+            return OpenAIEmbeddingFunction(model_name=model_name, api_key=api_key, base_url=base_url)
 
         elif self.embedding_model == "gemini":
             model_name = self.embedding_config.get("model_name", "gemini-embedding-001")
             api_key = self.embedding_config.get("api_key")
             base_url = self.embedding_config.get("base_url")
-            output_dimensionality = self.embedding_config.get("output_dimensionality")
-            max_retries = self.embedding_config.get("max_retries")
-            return GeminiEmbeddingFunction(
-                model_name=model_name,
-                api_key=api_key,
-                base_url=base_url,
-                output_dimensionality=output_dimensionality,
-                max_retries=max_retries,
-            )
-
-        elif self.embedding_model == "voyage":
-            model_name = self.embedding_config.get("model_name", VoyageEmbeddingFunction.DEFAULT_MODEL_NAME)
-            api_key = self.embedding_config.get("api_key")
-            base_url = self.embedding_config.get("base_url")
-            request_batch_size = self.embedding_config.get("request_batch_size")
-            max_retries = self.embedding_config.get("max_retries")
-            tokens_per_minute = self.embedding_config.get("tokens_per_minute")
-            output_dimension = self.embedding_config.get("output_dimension")
-            return VoyageEmbeddingFunction(
-                model_name=model_name,
-                api_key=api_key,
-                base_url=base_url,
-                request_batch_size=request_batch_size,
-                max_retries=max_retries,
-                tokens_per_minute=tokens_per_minute,
-                output_dimension=output_dimension,
-            )
-
-        elif self.embedding_model == "openrouter":
-            model_name = self.embedding_config.get("model_name", OpenRouterEmbeddingFunction.DEFAULT_MODEL_NAME)
-            api_key = self.embedding_config.get("api_key")
-            base_url = self.embedding_config.get("base_url")
-            request_batch_size = self.embedding_config.get("request_batch_size")
-            rate_limit_rps = (
-                self.embedding_config.get("rate_limit_rps")
-                if self.embedding_config.get("rate_limit_rps") is not None
-                else self.embedding_config.get("_semantic_rate_limit_rps")
-            )
-            return OpenRouterEmbeddingFunction(
-                model_name=model_name,
-                api_key=api_key,
-                base_url=base_url,
-                request_batch_size=request_batch_size,
-                rate_limit_rps=rate_limit_rps,
-            )
+            return GeminiEmbeddingFunction(model_name=model_name, api_key=api_key, base_url=base_url)
 
         elif self.embedding_model == "qwen":
             model_name = self.embedding_config.get("model_name", "Qwen/Qwen3-Embedding-0.6B")
@@ -1055,7 +430,7 @@ class ChromaClient:
             model_name = self.embedding_config.get("model_name", "google/embeddinggemma-300m")
             return HuggingFaceEmbeddingFunction(model_name=model_name)
 
-        elif self.embedding_model not in ["default", "openai", "openrouter", "gemini", "voyage"]:
+        elif self.embedding_model not in ["default", "openai", "gemini"]:
             # Treat any other value as a HuggingFace model name
             return HuggingFaceEmbeddingFunction(model_name=self.embedding_model)
 
@@ -1078,12 +453,11 @@ class ChromaClient:
         """
         if max_tokens is None:
             max_tokens = self.embedding_max_tokens
-        if hasattr(self.embedding_function, "truncate"):
+        if hasattr(self.embedding_function, 'truncate'):
             return self.embedding_function.truncate(text, max_tokens)
         # Fallback for default ChromaDB embedding function
         try:
             import tiktoken
-
             enc = tiktoken.get_encoding("cl100k_base")
             tokens = enc.encode(text, disallowed_special=())
             if len(tokens) > max_tokens:
@@ -1095,7 +469,10 @@ class ChromaClient:
                 text = text[:max_chars]
         return text
 
-    def add_documents(self, documents: list[str], metadatas: list[dict[str, Any]], ids: list[str]) -> None:
+    def add_documents(self,
+                     documents: list[str],
+                     metadatas: list[dict[str, Any]],
+                     ids: list[str]) -> None:
         """
         Add documents to the collection.
 
@@ -1105,13 +482,20 @@ class ChromaClient:
             ids: List of unique IDs for each document
         """
         try:
-            self.collection.add(documents=documents, metadatas=cast(Any, metadatas), ids=ids)
+            self.collection.add(
+                documents=documents,
+                metadatas=metadatas,
+                ids=ids
+            )
             logger.info(f"Added {len(documents)} documents to ChromaDB collection")
         except Exception as e:
             logger.error(f"Error adding documents to ChromaDB: {e}")
             raise
 
-    def upsert_documents(self, documents: list[str], metadatas: list[dict[str, Any]], ids: list[str]) -> None:
+    def upsert_documents(self,
+                        documents: list[str],
+                        metadatas: list[dict[str, Any]],
+                        ids: list[str]) -> None:
         """
         Upsert (update or insert) documents to the collection.
 
@@ -1121,19 +505,21 @@ class ChromaClient:
             ids: List of unique IDs for each document
         """
         try:
-            self.collection.upsert(documents=documents, metadatas=cast(Any, metadatas), ids=ids)
+            self.collection.upsert(
+                documents=documents,
+                metadatas=metadatas,
+                ids=ids
+            )
             logger.info(f"Upserted {len(documents)} documents to ChromaDB collection")
         except Exception as e:
             logger.error(f"Error upserting documents to ChromaDB: {e}")
             raise
 
-    def search(
-        self,
-        query_texts: list[str],
-        n_results: int = 10,
-        where: dict[str, Any] | None = None,
-        where_document: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    def search(self,
+               query_texts: list[str],
+               n_results: int = 10,
+               where: dict[str, Any] | None = None,
+               where_document: dict[str, Any] | None = None) -> dict[str, Any]:
         """
         Search for similar documents.
 
@@ -1159,17 +545,14 @@ class ChromaClient:
             # its embed_query returns chunked results, not a single vector.
             _is_custom_ef = isinstance(
                 self.embedding_function,
-                OpenAIEmbeddingFunction
-                | GeminiEmbeddingFunction
-                | VoyageEmbeddingFunction
-                | HuggingFaceEmbeddingFunction,
+                (OpenAIEmbeddingFunction, GeminiEmbeddingFunction, HuggingFaceEmbeddingFunction),
             )
-            if _is_custom_ef and hasattr(self.embedding_function, "embed_query") and query_texts:
+            if _is_custom_ef and hasattr(self.embedding_function, 'embed_query') and query_texts:
                 query_embeddings = []
                 for qt in query_texts:
                     emb = self.embedding_function.embed_query(qt)
                     # Ensure plain Python floats (some providers return numpy)
-                    if hasattr(emb, "tolist"):
+                    if hasattr(emb, 'tolist'):
                         emb = emb.tolist()
                     query_embeddings.append(emb)
                 query_kwargs["query_embeddings"] = query_embeddings
@@ -1178,7 +561,7 @@ class ChromaClient:
 
             results = self.collection.query(**query_kwargs)
             logger.info(f"Semantic search returned {len(results.get('ids', [[]])[0])} results")
-            return cast(dict[str, Any], results)
+            return results
         except Exception as e:
             logger.error(f"Error performing semantic search: {e}")
             raise
@@ -1205,7 +588,7 @@ class ChromaClient:
                 "name": self.collection_name,
                 "count": count,
                 "embedding_model": self.embedding_model,
-                "persist_directory": self.persist_directory,
+                "persist_directory": self.persist_directory
             }
         except Exception as e:
             logger.error(f"Error getting collection info: {e}")
@@ -1214,7 +597,7 @@ class ChromaClient:
                 "count": 0,
                 "embedding_model": self.embedding_model,
                 "persist_directory": self.persist_directory,
-                "error": str(e),
+                "error": str(e)
             }
 
     def reset_collection(self) -> None:
@@ -1222,7 +605,8 @@ class ChromaClient:
         try:
             self.client.delete_collection(name=self.collection_name)
             self.collection = self.client.create_collection(
-                name=self.collection_name, embedding_function=self.embedding_function
+                name=self.collection_name,
+                embedding_function=self.embedding_function
             )
             logger.info(f"Reset ChromaDB collection '{self.collection_name}'")
         except Exception as e:
@@ -1233,7 +617,7 @@ class ChromaClient:
         """Check if a document exists in the collection."""
         try:
             result = self.collection.get(ids=[doc_id])
-            return len(result["ids"]) > 0
+            return len(result['ids']) > 0
         except Exception:
             return False
 
@@ -1248,9 +632,9 @@ class ChromaClient:
             Metadata dictionary if document exists, None otherwise
         """
         try:
-            result = self.collection.get(ids=[doc_id], include=["metadatas"])  # type: ignore[list-item]
-            if result["ids"] and result["metadatas"]:
-                return cast(dict[str, Any], result["metadatas"][0])
+            result = self.collection.get(ids=[doc_id], include=["metadatas"])
+            if result['ids'] and result['metadatas']:
+                return result['metadatas'][0]
             return None
         except Exception:
             return None
@@ -1278,69 +662,6 @@ class ChromaClient:
             logger.error(f"Error listing collection ids: {e}")
             return set()
 
-    def delete_documents_by_item_type(self, item_type: str) -> int:
-        """Delete every chunk whose `metadata.item_type` equals the argument.
-
-        Used to purge stale data after tightening the ingest filter — e.g.
-        a past bug let `annotation` items through and they now sit in the
-        collection as noise. ChromaDB accepts a `where={}` filter on
-        `delete` but we first enumerate so we can return the count.
-        """
-        try:
-            result = self.collection.get(
-                where={"item_type": item_type},
-                include=[],
-            )
-            ids = list(result.get("ids", []))
-        except Exception as e:
-            logger.debug(f"item_type filter for {item_type} failed: {e}")
-            return 0
-        if not ids:
-            return 0
-        try:
-            self.collection.delete(ids=ids)
-            return len(ids)
-        except Exception as e:
-            logger.error(f"Failed to delete {len(ids)} chunks of type {item_type}: {e}")
-            return 0
-
-    def delete_documents_by_parent(self, parent_item_key: str) -> int:
-        """Delete every chunk associated with a parent Zotero item.
-
-        Chunk ids follow the `<parent_item_key>__<chunk_index>` convention
-        and also carry `metadata.parent_item_key`. We prefer the metadata
-        filter because it is authoritative even for legacy ids written
-        before the chunking migration.
-
-        Returns the number of ids removed.
-        """
-        try:
-            result = self.collection.get(
-                where={"parent_item_key": parent_item_key},
-                include=[],
-            )
-            ids = list(result.get("ids", []))
-        except Exception as e:
-            logger.debug(f"parent_item_key filter failed for {parent_item_key}: {e}; falling back to id-prefix match")
-            ids = []
-        # Fallback for legacy collections where parent_item_key wasn't stored
-        if not ids:
-            try:
-                all_ids = self.collection.get(include=[]).get("ids", [])
-                prefix = f"{parent_item_key}__"
-                ids = [i for i in all_ids if i == parent_item_key or i.startswith(prefix)]
-            except Exception as e:
-                logger.error(f"Could not enumerate collection to delete parent {parent_item_key}: {e}")
-                return 0
-        if not ids:
-            return 0
-        try:
-            self.collection.delete(ids=ids)
-            return len(ids)
-        except Exception as e:
-            logger.error(f"Failed to delete {len(ids)} chunks for parent {parent_item_key}: {e}")
-            return 0
-
 
 def create_chroma_client(config_path: str | None = None) -> ChromaClient:
     """
@@ -1353,7 +674,11 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
         Configured ChromaClient instance
     """
     # Default configuration
-    config = {"collection_name": "zotero_library", "embedding_model": "default", "embedding_config": {}}
+    config = {
+        "collection_name": "zotero_library",
+        "embedding_model": "default",
+        "embedding_config": {}
+    }
 
     # Load configuration from file if it exists
     if config_path and os.path.exists(config_path):
@@ -1365,7 +690,7 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
             logger.warning(f"Error loading config from {config_path}: {e}")
 
     # Load configuration from environment variables
-    env_embedding_model = _get_env("ZOTERO_EMBEDDING_MODEL")
+    env_embedding_model = os.getenv("ZOTERO_EMBEDDING_MODEL")
     if env_embedding_model:
         config["embedding_model"] = env_embedding_model
 
@@ -1377,13 +702,15 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
     if config["embedding_model"] == "openai":
         ec = dict(config.get("embedding_config") or {})
         if not ec.get("api_key"):
-            env_key = _get_env("OPENAI_API_KEY")
+            env_key = os.getenv("OPENAI_API_KEY")
             if env_key:
                 ec["api_key"] = env_key
         if not ec.get("model_name"):
-            ec["model_name"] = _get_env("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+            ec["model_name"] = os.getenv(
+                "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"
+            )
         if not ec.get("base_url"):
-            env_base = _get_env("OPENAI_BASE_URL")
+            env_base = os.getenv("OPENAI_BASE_URL")
             if env_base:
                 ec["base_url"] = env_base
         if ec.get("api_key"):
@@ -1392,63 +719,22 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
     elif config["embedding_model"] == "gemini":
         ec = dict(config.get("embedding_config") or {})
         if not ec.get("api_key"):
-            env_key = _get_env("GEMINI_API_KEY") or _get_env("GOOGLE_API_KEY")
+            env_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
             if env_key:
                 ec["api_key"] = env_key
         if not ec.get("model_name"):
-            ec["model_name"] = _get_env("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001")
+            ec["model_name"] = os.getenv(
+                "GEMINI_EMBEDDING_MODEL", "gemini-embedding-001"
+            )
         if not ec.get("base_url"):
-            env_base = _get_env("GEMINI_BASE_URL")
+            env_base = os.getenv("GEMINI_BASE_URL")
             if env_base:
                 ec["base_url"] = env_base
-        ec.setdefault("output_dimensionality", GeminiEmbeddingFunction.DEFAULT_OUTPUT_DIMENSIONALITY)
-        ec.setdefault("max_retries", GeminiEmbeddingFunction.DEFAULT_MAX_RETRIES)
         if ec.get("api_key"):
             config["embedding_config"] = ec
-
-    elif config["embedding_model"] == "voyage":
-        ec = dict(config.get("embedding_config") or {})
-        if not ec.get("api_key"):
-            env_key = _get_env("VOYAGE_API_KEY")
-            if env_key:
-                ec["api_key"] = env_key
-        if not ec.get("model_name"):
-            ec["model_name"] = _get_env("VOYAGE_EMBEDDING_MODEL", VoyageEmbeddingFunction.DEFAULT_MODEL_NAME)
-        if not ec.get("base_url"):
-            env_base = _get_env("VOYAGE_BASE_URL")
-            if env_base:
-                ec["base_url"] = env_base
-        ec.setdefault("request_batch_size", VoyageEmbeddingFunction.VOYAGE_MAX_BATCH)
-        ec.setdefault("tokens_per_minute", VoyageEmbeddingFunction.DEFAULT_TOKENS_PER_MINUTE)
-        ec.setdefault("max_retries", VoyageEmbeddingFunction.DEFAULT_MAX_RETRIES)
-        ec.setdefault("output_dimension", VoyageEmbeddingFunction.DEFAULT_OUTPUT_DIMENSION)
-        if ec.get("api_key"):
-            config["embedding_config"] = ec
-
-    elif config["embedding_model"] == "openrouter":
-        ec = dict(config.get("embedding_config") or {})
-        if not ec.get("api_key"):
-            env_key = _get_env("OPENROUTER_API_KEY")
-            if env_key:
-                ec["api_key"] = env_key
-        if not ec.get("model_name"):
-            ec["model_name"] = _get_env("OPENROUTER_EMBEDDING_MODEL", OpenRouterEmbeddingFunction.DEFAULT_MODEL_NAME)
-        if not ec.get("base_url"):
-            ec["base_url"] = _get_env("OPENROUTER_BASE_URL", OpenRouterEmbeddingFunction.DEFAULT_BASE_URL)
-        if ec.get("api_key"):
-            config["embedding_config"] = ec
-
-    # Propagate the top-level semantic_search.embedding_rate_limit_rps down
-    # into the embedding_config so OpenAIEmbeddingFunction sees it at
-    # construction time. The explicit-inside-embedding_config value, if
-    # set, wins.
-    if "embedding_rate_limit_rps" in config and config["embedding_rate_limit_rps"] is not None:
-        ec = dict(config.get("embedding_config") or {})
-        ec.setdefault("rate_limit_rps", config["embedding_rate_limit_rps"])
-        config["embedding_config"] = ec
 
     return ChromaClient(
         collection_name=config["collection_name"],
         embedding_model=config["embedding_model"],
-        embedding_config=config["embedding_config"],
+        embedding_config=config["embedding_config"]
     )

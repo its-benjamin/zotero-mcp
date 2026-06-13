@@ -7,6 +7,15 @@ a headless Linux server talking to Zotero cloud).
 """
 
 import json
+import sys
+
+import pytest
+
+if sys.version_info >= (3, 14):
+    pytest.skip(
+        "chromadb currently relies on pydantic v1 paths that are incompatible with Python 3.14+",
+        allow_module_level=True,
+    )
 
 from zotero_mcp import semantic_search
 
@@ -46,13 +55,6 @@ class FakeChromaClient:
         for i in ids:
             self._ids.discard(i)
 
-    def delete_documents_by_parent(self, parent_item_key):
-        prefix = f"{parent_item_key}__"
-        victims = [i for i in self._ids if i == parent_item_key or i.startswith(prefix)]
-        if victims:
-            self.delete_documents(victims)
-        return len(victims)
-
     def reset_collection(self):
         self.reset_calls += 1
         self._ids = set()
@@ -63,10 +65,10 @@ class FakeZoteroClient:
 
     def __init__(self):
         self.items_by_key = {}
-        self.fulltext_by_key = {}  # key -> dict (content, indexedChars, ...)
+        self.fulltext_by_key = {}   # key -> dict (content, indexedChars, ...)
         self.children_by_parent = {}  # parent_key -> list[item]
-        self.versions_state = {}  # key -> library_version (current state)
-        self.version_history = []  # (since_version, changed_dict) pairs
+        self.versions_state = {}    # key -> library_version (current state)
+        self.version_history = []   # (since_version, changed_dict) pairs
         self.current_library_version = 0
         # Pagination helper
         self.items_order = []
@@ -91,7 +93,7 @@ class FakeZoteroClient:
 
     def items(self, start=0, limit=100, **kwargs):
         self.calls.append(("items", start, limit))
-        chunk = self.items_order[start : start + limit]
+        chunk = self.items_order[start:start + limit]
         return [self.items_by_key[k] for k in chunk]
 
     def item(self, key):
@@ -137,9 +139,8 @@ def _paper(key, title="Paper", item_type="conferencePaper", version=1):
     }
 
 
-def _build_search(
-    monkeypatch, zot: FakeZoteroClient, chroma: FakeChromaClient, config_path: str | None = None
-) -> "semantic_search.ZoteroSemanticSearch":
+def _build_search(monkeypatch, zot: FakeZoteroClient, chroma: FakeChromaClient,
+                  config_path: str | None = None) -> "semantic_search.ZoteroSemanticSearch":
     monkeypatch.setattr(semantic_search, "get_zotero_client", lambda: zot)
     monkeypatch.setattr(semantic_search, "is_local_mode", lambda: False)
     return semantic_search.ZoteroSemanticSearch(
@@ -150,12 +151,9 @@ def _build_search(
 
 # --------- Unit tests: fulltext fetch helper ----------
 
-
 def test_fetch_fulltext_via_web_api_parent_hit(monkeypatch):
     zot = FakeZoteroClient()
-    zot.load_scenario(
-        [_paper("AAA")], fulltext={"AAA": {"content": "Body text.", "indexedChars": 10, "totalChars": 10}}
-    )
+    zot.load_scenario([_paper("AAA")], fulltext={"AAA": {"content": "Body text.", "indexedChars": 10, "totalChars": 10}})
     search = _build_search(monkeypatch, zot, FakeChromaClient())
     text, source = search._fetch_fulltext_via_web_api("AAA")
     assert text == "Body text."
@@ -198,16 +196,10 @@ def test_fetch_fulltext_via_web_api_returns_empty_when_nothing_available(monkeyp
 
 def test_fetch_fulltext_skips_non_pdf_children(monkeypatch):
     parent = _paper("PAR")
-    child_pdf = {
-        "key": "PDF",
-        "version": 1,
-        "data": {"key": "PDF", "itemType": "attachment", "contentType": "application/pdf"},
-    }
-    child_html = {
-        "key": "HTM",
-        "version": 1,
-        "data": {"key": "HTM", "itemType": "attachment", "contentType": "text/html"},
-    }
+    child_pdf = {"key": "PDF", "version": 1,
+                 "data": {"key": "PDF", "itemType": "attachment", "contentType": "application/pdf"}}
+    child_html = {"key": "HTM", "version": 1,
+                  "data": {"key": "HTM", "itemType": "attachment", "contentType": "text/html"}}
     zot = FakeZoteroClient()
     zot.load_scenario(
         [parent],
@@ -222,7 +214,6 @@ def test_fetch_fulltext_skips_non_pdf_children(monkeypatch):
 
 
 # --------- Integration tests: _get_items_from_api ----------
-
 
 def test_get_items_from_api_without_fulltext_leaves_data_untouched(monkeypatch):
     zot = FakeZoteroClient()
@@ -257,26 +248,7 @@ def test_get_items_from_api_with_fulltext_marks_misses_as_attempted(monkeypatch)
     assert items[0]["data"]["fulltext_attempted"] is True
 
 
-def test_attach_web_fulltext_parallel_worker_populates_items(monkeypatch):
-    zot = FakeZoteroClient()
-    items = [_paper("A"), _paper("B"), _paper("C")]
-    zot.load_scenario(
-        items,
-        fulltext={"A": {"content": "Abody"}, "B": {"content": "Bbody"}},
-    )
-    search = _build_search(monkeypatch, zot, FakeChromaClient())
-    monkeypatch.setattr(search, "_load_web_fulltext_workers", lambda: 2)
-
-    search._attach_web_fulltext(items)
-
-    by_key = {it["key"]: it for it in items}
-    assert by_key["A"]["data"]["fulltext"] == "Abody"
-    assert by_key["B"]["data"]["fulltext"] == "Bbody"
-    assert by_key["C"]["data"]["fulltext_attempted"] is True
-
-
 # --------- Integration tests: incremental fetch ----------
-
 
 def test_get_changed_items_from_api_returns_only_changed_keys(monkeypatch):
     zot = FakeZoteroClient()
@@ -304,80 +276,7 @@ def test_get_changed_items_filters_out_attachments_and_notes(monkeypatch):
     assert [c["key"] for c in changed] == ["P1"]
 
 
-def test_get_items_from_api_filters_out_annotations(monkeypatch):
-    """Regression guard: the bootstrap path used to exclude only
-    attachment+note, letting annotation items (PDF highlights / user
-    comments) sneak in as top-level chunks. Confirm they're gone."""
-    zot = FakeZoteroClient()
-    ann = _paper("A1", item_type="annotation")
-    attach = _paper("X1", item_type="attachment")
-    note = _paper("N1", item_type="note")
-    paper = _paper("P1", item_type="journalArticle")
-    zot.load_scenario([ann, attach, note, paper], library_version=3)
-    search = _build_search(monkeypatch, zot, FakeChromaClient())
-    items = search._get_items_from_api(include_fulltext=False)
-    assert [it["key"] for it in items] == ["P1"]
-
-
-def test_fetch_items_by_keys_filters_out_annotations(monkeypatch):
-    """Gap-fill's batched fetch must also drop annotation items so
-    previous runs' filter bug can't replicate through the resume path."""
-    zot = FakeZoteroClient()
-    ann = _paper("A1", item_type="annotation")
-    paper = _paper("P1", item_type="journalArticle")
-    zot.load_scenario([ann, paper], library_version=5)
-    # Replace items() so it returns both when called (simulating batched
-    # itemKey fetch)
-    zot.items = lambda **kw: [zot.items_by_key["A1"], zot.items_by_key["P1"]]
-    zot.add_parameters = lambda **kw: None
-    search = _build_search(monkeypatch, zot, FakeChromaClient())
-    result = search._fetch_items_by_keys(["A1", "P1"])
-    assert [it["key"] for it in result] == ["P1"]
-
-
-def test_update_database_cleans_up_stale_annotation_chunks(monkeypatch, tmp_path):
-    """A user who ingested with the buggy filter ends up with orphan
-    annotation chunks in ChromaDB. update_database must purge them on
-    every run (it's idempotent / cheap) so the collection self-heals."""
-    config_path = _write_config(tmp_path, extra={"last_sync_version": 10})
-    zot = FakeZoteroClient()
-    zot.load_scenario([_paper("REAL", item_type="journalArticle")], library_version=10)
-    zot.versions_state = {"REAL": 10}
-
-    class CleanableChroma(FakeChromaClient):
-        def __init__(self, *a, **kw):
-            super().__init__(*a, **kw)
-            # Seed with a mix: 2 annotation chunks and 1 real paper chunk
-            self._chunks = {
-                "STALE_ANN_1__0": {"item_type": "annotation", "parent_item_key": "STALE_ANN_1"},
-                "STALE_ANN_2__0": {"item_type": "annotation", "parent_item_key": "STALE_ANN_2"},
-                "REAL__0": {"item_type": "journalArticle", "parent_item_key": "REAL"},
-            }
-            self._ids = set(self._chunks.keys())
-            self.deleted_by_type = []
-
-        def delete_documents_by_item_type(self, item_type):
-            victims = [i for i, m in self._chunks.items() if m.get("item_type") == item_type]
-            for v in victims:
-                self._ids.discard(v)
-                del self._chunks[v]
-            if victims:
-                self.deleted_by_type.append((item_type, len(victims)))
-            return len(victims)
-
-        def get_all_ids(self):
-            return set(self._ids)
-
-    chroma = CleanableChroma()
-    search = _build_search(monkeypatch, zot, chroma, config_path=config_path)
-    stats = search.update_database()
-
-    assert ("annotation", 2) in chroma.deleted_by_type
-    assert stats["cleaned_annotation_chunks"] == 2
-
-
 # --------- Integration tests: update_database orchestration ----------
-
 
 def _write_config(tmp_path, extra: dict | None = None):
     cfg = {
@@ -425,8 +324,7 @@ def test_update_database_incremental_only_fetches_changed(monkeypatch, tmp_path)
         library_version=8,
     )
     zot.versions_state = {"OLD": 3, "NEW": 8}
-    # Preload with new-format chunk ids so the legacy-format detector stays silent
-    chroma = FakeChromaClient(preloaded_ids=["OLD__0"])
+    chroma = FakeChromaClient(preloaded_ids=["OLD"])  # OLD was already indexed
     search = _build_search(monkeypatch, zot, chroma, config_path=config_path)
 
     stats = search.update_database()
@@ -434,8 +332,7 @@ def test_update_database_incremental_only_fetches_changed(monkeypatch, tmp_path)
     # Only NEW should be processed, OLD untouched
     assert stats["processed_items"] == 1
     added_ids = [i for batch in chroma.added for i in batch[2]]
-    # Each item now emits one-or-more chunk ids
-    assert all(i.startswith("NEW__") for i in added_ids)
+    assert added_ids == ["NEW"]
     saved = json.loads(open(config_path).read())
     assert saved["semantic_search"]["last_sync_version"] == 8
 
@@ -447,16 +344,13 @@ def test_update_database_incremental_deletes_removed_items(monkeypatch, tmp_path
     # Only NEW is still in the library; DELETED_ME was removed
     zot.load_scenario([_paper("NEW")], fulltext={"NEW": {"content": "body"}}, library_version=9)
     zot.versions_state = {"NEW": 9}
-    # Chunked-format preloads — NEW has 1 chunk, DELETED_ME had 2
-    chroma = FakeChromaClient(preloaded_ids=["NEW__0", "DELETED_ME__0", "DELETED_ME__1"])
+    chroma = FakeChromaClient(preloaded_ids=["NEW", "DELETED_ME"])
     search = _build_search(monkeypatch, zot, chroma, config_path=config_path)
 
     stats = search.update_database()
 
-    # The deletion pass collapses chunks back to parent keys before diffing
-    assert "DELETED_ME__0" in chroma.deleted
-    assert "DELETED_ME__1" in chroma.deleted
-    assert stats["deleted_items"] == 1  # one parent removed
+    assert "DELETED_ME" in chroma.deleted
+    assert stats["deleted_items"] == 1
 
 
 def test_update_database_incremental_noop_when_version_unchanged(monkeypatch, tmp_path):
@@ -465,7 +359,7 @@ def test_update_database_incremental_noop_when_version_unchanged(monkeypatch, tm
     zot = FakeZoteroClient()
     zot.load_scenario([_paper("X")], library_version=42)
     zot.versions_state = {"X": 42}
-    chroma = FakeChromaClient(preloaded_ids=["X__0"])
+    chroma = FakeChromaClient(preloaded_ids=["X"])
     search = _build_search(monkeypatch, zot, chroma, config_path=config_path)
 
     stats = search.update_database()
@@ -494,129 +388,6 @@ def test_update_database_disables_fulltext_when_config_off(monkeypatch, tmp_path
 
     # fulltext_item should never be called
     assert not any(c[0] == "fulltext_item" for c in zot.calls)
-
-
-def test_update_database_gap_fills_missing_items(monkeypatch, tmp_path):
-    """Resume case: ChromaDB is partially populated (e.g. killed mid-rebuild)
-    but last_sync_version equals library version. The old noop fast-path
-    would return "nothing to reindex"; the new diff-driven path detects
-    items in the library that are missing from ChromaDB and fetches them."""
-    config_path = _write_config(tmp_path, extra={"last_sync_version": 100})
-    zot = FakeZoteroClient()
-    # Three items in library, all unchanged since version 100
-    zot.load_scenario(
-        [_paper("A"), _paper("B"), _paper("C")],
-        fulltext={"A": {"content": "Abody"}, "B": {"content": "Bbody"}, "C": {"content": "Cbody"}},
-        library_version=100,
-    )
-    zot.versions_state = {"A": 100, "B": 100, "C": 100}
-    # Only A was indexed before the interruption
-    chroma = FakeChromaClient(preloaded_ids=["A__0", "A__1"])
-    search = _build_search(monkeypatch, zot, chroma, config_path=config_path)
-
-    stats = search.update_database()
-
-    # B and C should have been gap-filled
-    assert stats["gap_filled_items"] == 2
-    # All gap items should be in ChromaDB now
-    added_ids = [i for batch in chroma.added for i in batch[2]]
-    added_parents = {i.split("__", 1)[0] for i in added_ids}
-    assert added_parents == {"B", "C"}
-    # A was left untouched
-    assert "A" not in added_parents
-    # Watermark advances to current library version
-    saved = json.loads(open(config_path).read())
-    assert saved["semantic_search"]["last_sync_version"] == 100
-
-
-def test_update_database_gap_fill_combined_with_since_changes(monkeypatch, tmp_path):
-    """Gap-fill + since-V changes should both land in the same run."""
-    config_path = _write_config(tmp_path, extra={"last_sync_version": 50})
-    zot = FakeZoteroClient()
-    zot.load_scenario(
-        [_paper("GAP"), _paper("CHANGED")],
-        fulltext={"GAP": {"content": "Gbody"}, "CHANGED": {"content": "Cbody"}},
-        library_version=80,
-    )
-    # CHANGED version 75 > 50, GAP version 40 < 50 but absent from ChromaDB
-    zot.versions_state = {"GAP": 40, "CHANGED": 75}
-    chroma = FakeChromaClient(preloaded_ids=[])  # completely empty
-    search = _build_search(monkeypatch, zot, chroma, config_path=config_path)
-
-    stats = search.update_database()
-
-    added_parents = {i.split("__", 1)[0] for batch in chroma.added for i in batch[2]}
-    assert added_parents == {"GAP", "CHANGED"}
-    assert stats["gap_filled_items"] == 1
-
-
-def test_update_database_true_noop_when_fully_synced(monkeypatch, tmp_path):
-    """Library unchanged AND ChromaDB has every library item => truly nothing to do."""
-    config_path = _write_config(tmp_path, extra={"last_sync_version": 99})
-    zot = FakeZoteroClient()
-    zot.load_scenario([_paper("X")], library_version=99)
-    zot.versions_state = {"X": 99}
-    chroma = FakeChromaClient(preloaded_ids=["X__0", "X__1"])
-    search = _build_search(monkeypatch, zot, chroma, config_path=config_path)
-
-    stats = search.update_database()
-
-    assert stats["processed_items"] == 0
-    assert stats["gap_filled_items"] == 0
-    assert stats["deleted_items"] == 0
-    # No items should have been re-upserted
-    assert chroma.added == []
-
-
-def test_fetch_items_by_keys_batches_requests(monkeypatch):
-    """Verifies itemKey= is used and the batch size of 50 is respected."""
-    zot = FakeZoteroClient()
-    # Preload 120 items
-    items = [_paper(f"K{i:03d}") for i in range(120)]
-    zot.load_scenario(items, library_version=1)
-
-    # Replace items() to record how itemKey param was passed
-    captured_keys: list[list[str]] = []
-    original_items = zot.items
-
-    def recording_items(start=0, limit=100, **kwargs):
-        # pyzotero's add_parameters stores url_params; fake it here
-        captured_keys.append([k for k in getattr(zot, "_fake_itemkey", "").split(",") if k])
-        return original_items(start=0, limit=len(captured_keys[-1]) or limit)
-
-    def fake_add_parameters(**params):
-        zot._fake_itemkey = params.get("itemKey", "")
-
-    zot.add_parameters = fake_add_parameters
-    zot.items = recording_items
-
-    search = _build_search(monkeypatch, zot, FakeChromaClient())
-    keys_to_fetch = [f"K{i:03d}" for i in range(120)]
-    result = search._fetch_items_by_keys(keys_to_fetch)
-
-    # 120 keys -> 3 batches of 50 (50 + 50 + 20)
-    assert len(captured_keys) == 3
-    assert [len(b) for b in captured_keys] == [50, 50, 20]
-    assert len(result) > 0
-
-
-def test_fetch_items_by_keys_falls_back_to_per_key_on_batch_error(monkeypatch):
-    """If the batched itemKey request raises, each key is re-tried individually
-    so one malformed key can't stall the whole backfill."""
-    zot = FakeZoteroClient()
-    zot.load_scenario([_paper("X"), _paper("Y")], library_version=1)
-
-    def boom_items(**kwargs):
-        raise RuntimeError("simulated batch failure")
-
-    zot.items = boom_items
-    zot.add_parameters = lambda **kw: None
-
-    search = _build_search(monkeypatch, zot, FakeChromaClient())
-    result = search._fetch_items_by_keys(["X", "Y"])
-    # Fallback uses zot.item(key) per key, which FakeZoteroClient supports
-    returned_keys = {it["key"] for it in result}
-    assert returned_keys == {"X", "Y"}
 
 
 def test_update_database_force_rebuild_triggers_reset_and_full_scan(monkeypatch, tmp_path):
@@ -655,35 +426,28 @@ def test_update_database_force_rebuild_updates_last_sync_version(monkeypatch, tm
 
 # --------- Config loaders ----------
 
-
 def test_load_include_fulltext_defaults_true(monkeypatch, tmp_path):
     # No config file exists
-    search = _build_search(
-        monkeypatch, FakeZoteroClient(), FakeChromaClient(), config_path=str(tmp_path / "missing.json")
-    )
+    search = _build_search(monkeypatch, FakeZoteroClient(), FakeChromaClient(),
+                           config_path=str(tmp_path / "missing.json"))
     assert search._load_include_fulltext_setting() is True
 
 
 def test_load_include_fulltext_respects_opt_out(monkeypatch, tmp_path):
     config_path = _write_config(tmp_path, extra={"include_fulltext": False})
-    search = _build_search(monkeypatch, FakeZoteroClient(), FakeChromaClient(), config_path=config_path)
+    search = _build_search(monkeypatch, FakeZoteroClient(), FakeChromaClient(),
+                           config_path=config_path)
     assert search._load_include_fulltext_setting() is False
 
 
-def test_load_web_fulltext_workers_from_config(monkeypatch, tmp_path):
-    config_path = _write_config(tmp_path, extra={"web_fulltext_workers": 2})
-    search = _build_search(monkeypatch, FakeZoteroClient(), FakeChromaClient(), config_path=config_path)
-    assert search._load_web_fulltext_workers() == 2
-
-
 def test_load_last_sync_version_defaults_zero(monkeypatch, tmp_path):
-    search = _build_search(
-        monkeypatch, FakeZoteroClient(), FakeChromaClient(), config_path=str(tmp_path / "missing.json")
-    )
+    search = _build_search(monkeypatch, FakeZoteroClient(), FakeChromaClient(),
+                           config_path=str(tmp_path / "missing.json"))
     assert search._load_last_sync_version() == 0
 
 
 def test_load_last_sync_version_reads_int(monkeypatch, tmp_path):
     config_path = _write_config(tmp_path, extra={"last_sync_version": 123})
-    search = _build_search(monkeypatch, FakeZoteroClient(), FakeChromaClient(), config_path=config_path)
+    search = _build_search(monkeypatch, FakeZoteroClient(), FakeChromaClient(),
+                           config_path=config_path)
     assert search._load_last_sync_version() == 123

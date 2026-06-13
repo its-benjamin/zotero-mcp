@@ -1,6 +1,4 @@
-import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 from zotero_mcp.local_db import LocalZoteroReader, ZoteroItem
 
@@ -14,8 +12,6 @@ class FakeLocalZoteroReader(LocalZoteroReader):
         self._connection = None
         self.pdf_max_pages = 10
         self.pdf_timeout = 30
-        self.pdf_backend = "pdfminer"
-        self.pdf_use_ocr = False
         self._fake_text = fake_text
         self._fake_pdf_path = fake_pdf_path
 
@@ -73,55 +69,6 @@ def test_get_searchable_text_truncates_at_limit():
     assert "z" * 50001 not in text
     assert "..." in text
 
-def test_pymupdf4llm_backend_uses_optional_markdown_extractor(monkeypatch, tmp_path):
-    calls = []
-
-    def fake_to_markdown(path, **kwargs):
-        calls.append((path, kwargs))
-        return "# Heading\n\nBody text"
-
-    monkeypatch.setitem(sys.modules, "pymupdf4llm", SimpleNamespace(to_markdown=fake_to_markdown))
-    pdf = tmp_path / "paper.pdf"
-    pdf.write_bytes(b"%PDF-1.4")
-    reader = FakeLocalZoteroReader()
-    reader.pdf_backend = "pymupdf4llm"
-
-    result = reader._extract_text_from_pdf(pdf)
-
-    assert result == "# Heading\n\nBody text"
-    assert len(calls) == 1
-    assert calls[0][0] == str(pdf)
-    assert calls[0][1]["pages"] == list(range(10))
-    assert calls[0][1]["use_ocr"] is False
-
-def test_pymupdf4llm_backend_falls_back_to_pdfminer(monkeypatch, tmp_path):
-    calls = []
-
-    def fake_to_markdown(path, **kwargs):
-        calls.append(("pymupdf4llm", path, kwargs))
-        return ""
-
-    def fake_run(args, **kwargs):
-        calls.append(("pdfminer", args, kwargs))
-        return SimpleNamespace(returncode=0, stdout="pdfminer text", stderr="")
-
-    import subprocess
-
-    monkeypatch.setitem(sys.modules, "pymupdf4llm", SimpleNamespace(to_markdown=fake_to_markdown))
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    pdf = tmp_path / "paper.pdf"
-    pdf.write_bytes(b"%PDF-1.4")
-    reader = FakeLocalZoteroReader()
-    reader.pdf_backend = "pymupdf4llm"
-
-    result = reader._extract_text_from_pdf(pdf)
-
-    assert result == "pdfminer text"
-    assert len(calls) == 2
-    assert calls[0][0] == "pymupdf4llm"
-    assert calls[1][0] == "pdfminer"
-    assert "pdfminer.high_level" in calls[1][1][2]
-
 
 class TestResolveAttachmentPath:
     """Tests for _resolve_attachment_path handling of various Zotero path formats."""
@@ -165,7 +112,9 @@ class TestResolveAttachmentPath:
         base_dir.mkdir()
         # Write a prefs.js with baseAttachmentPath
         prefs = tmp_path / "prefs.js"
-        prefs.write_text(f'user_pref("extensions.zotero.baseAttachmentPath", "{base_dir}");\n')
+        prefs.write_text(
+            f'user_pref("extensions.zotero.baseAttachmentPath", "{base_dir}");\n'
+        )
         result = reader._resolve_attachment_path("X", "attachments:subfolder/paper.pdf")
         assert result == base_dir / "subfolder" / "paper.pdf"
 
@@ -224,12 +173,145 @@ class TestGetAttachmentPaths:
         assert reader.get_attachment_paths("MISSING") == []
 
     def test_multiple_attachments(self, tmp_path):
-        reader = self._make_reader(
-            tmp_path,
-            [
-                ("A", "storage:a.pdf", "application/pdf"),
-                ("B", "storage:b.html", "text/html"),
-            ],
-        )
+        reader = self._make_reader(tmp_path, [
+            ("A", "storage:a.pdf", "application/pdf"),
+            ("B", "storage:b.html", "text/html"),
+        ])
         result = reader.get_attachment_paths("PARENT")
         assert [a["key"] for a in result] == ["A", "B"]
+
+
+def _create_feed_db(db_path: Path) -> None:
+    import sqlite3
+
+    conn = sqlite3.connect(db_path)
+    conn.executescript(
+        """
+        CREATE TABLE feeds (
+            libraryID INTEGER PRIMARY KEY,
+            name TEXT,
+            url TEXT,
+            lastCheck TEXT,
+            lastUpdate TEXT,
+            lastCheckError TEXT,
+            refreshInterval INTEGER
+        );
+        CREATE TABLE feedItems (
+            itemID INTEGER PRIMARY KEY,
+            readTime TEXT,
+            translatedTime TEXT
+        );
+        CREATE TABLE items (
+            itemID INTEGER PRIMARY KEY,
+            key TEXT,
+            itemTypeID INTEGER,
+            libraryID INTEGER,
+            dateAdded TEXT
+        );
+        CREATE TABLE itemTypes (
+            itemTypeID INTEGER PRIMARY KEY,
+            typeName TEXT
+        );
+        CREATE TABLE fields (
+            fieldID INTEGER PRIMARY KEY,
+            fieldName TEXT
+        );
+        CREATE TABLE itemData (
+            itemID INTEGER,
+            fieldID INTEGER,
+            valueID INTEGER
+        );
+        CREATE TABLE itemDataValues (
+            valueID INTEGER PRIMARY KEY,
+            value TEXT
+        );
+        CREATE TABLE itemCreators (
+            itemID INTEGER,
+            creatorID INTEGER
+        );
+        CREATE TABLE creators (
+            creatorID INTEGER PRIMARY KEY,
+            firstName TEXT,
+            lastName TEXT
+        );
+        """
+    )
+    conn.executemany(
+        "INSERT INTO fields (fieldID, fieldName) VALUES (?, ?)",
+        [
+            (1, "title"),
+            (2, "abstractNote"),
+            (13, "date"),
+            (15, "url"),
+            (26, "DOI"),
+        ],
+    )
+    conn.execute(
+        """
+        INSERT INTO feeds (
+            libraryID, name, url, lastCheck, lastUpdate, lastCheckError, refreshInterval
+        ) VALUES (10, 'Example Feed', 'https://example.test/feed.xml', NULL, NULL, NULL, 60)
+        """
+    )
+    conn.execute("INSERT INTO itemTypes (itemTypeID, typeName) VALUES (7, 'journalArticle')")
+    conn.execute(
+        """
+        INSERT INTO items (itemID, key, itemTypeID, libraryID, dateAdded)
+        VALUES (100, 'FEEDKEY1', 7, 10, '2026-06-01 10:00:00')
+        """
+    )
+    conn.execute(
+        "INSERT INTO feedItems (itemID, readTime, translatedTime) VALUES (100, NULL, NULL)"
+    )
+    conn.executemany(
+        "INSERT INTO itemDataValues (valueID, value) VALUES (?, ?)",
+        [
+            (1001, "Feed Item Title"),
+            (1002, "Feed item abstract"),
+            (1003, "2024-05-15"),
+            (1004, "https://example.test/item"),
+            (1005, "10.1234/example.doi"),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO itemData (itemID, fieldID, valueID) VALUES (100, ?, ?)",
+        [
+            (1, 1001),
+            (2, 1002),
+            (13, 1003),
+            (15, 1004),
+            (26, 1005),
+        ],
+    )
+    conn.execute(
+        "INSERT INTO creators (creatorID, firstName, lastName) VALUES (1, 'Ada', 'Lovelace')"
+    )
+    conn.execute("INSERT INTO itemCreators (itemID, creatorID) VALUES (100, 1)")
+    conn.commit()
+    conn.close()
+
+
+def test_get_feed_items_includes_publication_date(tmp_path):
+    db_path = tmp_path / "zotero.sqlite"
+    _create_feed_db(db_path)
+
+    reader = LocalZoteroReader(db_path=str(db_path))
+    try:
+        items = reader.get_feed_items(10, limit=20)
+    finally:
+        reader.close()
+
+    assert items[0]["date"] == "2024-05-15"
+
+
+def test_get_feed_items_includes_doi(tmp_path):
+    db_path = tmp_path / "zotero.sqlite"
+    _create_feed_db(db_path)
+
+    reader = LocalZoteroReader(db_path=str(db_path))
+    try:
+        items = reader.get_feed_items(10, limit=20)
+    finally:
+        reader.close()
+
+    assert items[0]["DOI"] == "10.1234/example.doi"

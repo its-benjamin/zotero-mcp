@@ -25,6 +25,20 @@ def _obfuscate_sensitive(value: str | None, keep_chars: int = 4) -> str:
     return value[:keep_chars] + "*" * (len(value) - keep_chars)
 
 
+def _restrict_file_permissions(path) -> None:
+    """Best-effort ``chmod 600`` on a config file that may hold credentials.
+
+    Config files written here can contain ZOTERO_API_KEY and OpenAI/Gemini
+    keys; default umask often leaves them world-readable, which matters on
+    shared hosts / synced ~/.config. No-op on platforms without POSIX
+    permissions (Windows).
+    """
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 def find_executable():
     """Find the full path to the zotero-mcp executable."""
     # Try to find the executable in the PATH
@@ -42,7 +56,6 @@ def find_executable():
 
     # User site-packages
     import site
-
     for site_path in site.getsitepackages():
         potential_paths.append(Path(site_path) / "bin" / exe_name)
 
@@ -67,16 +80,13 @@ def find_executable():
     print("Searching for zotero-mcp in common locations...")
     try:
         # On Unix-like systems, try using the 'find' command
-        if sys.platform != "win32":
+        if sys.platform != 'win32':
             import subprocess
-
             result = subprocess.run(
                 ["find", os.path.expanduser("~"), "-name", "zotero-mcp", "-type", "f", "-executable"],
-                capture_output=True,
-                text=True,
-                timeout=10,
+                capture_output=True, text=True, timeout=10
             )
-            paths = result.stdout.strip().split("\n")
+            paths = result.stdout.strip().split('\n')
             if paths and paths[0]:
                 print(f"Found zotero-mcp at {paths[0]}")
                 return paths[0]
@@ -96,9 +106,7 @@ def find_claude_config(verbose: bool = False):
     if sys.platform == "darwin":
         # Try both old and new paths
         config_paths.append(Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json")
-        config_paths.append(
-            Path.home() / "Library" / "Application Support" / "Claude Desktop" / "claude_desktop_config.json"
-        )
+        config_paths.append(Path.home() / "Library" / "Application Support" / "Claude Desktop" / "claude_desktop_config.json")
 
     # Windows
     elif sys.platform == "win32":
@@ -109,7 +117,7 @@ def find_claude_config(verbose: bool = False):
 
     # Linux
     else:
-        config_home = os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")
+        config_home = os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')
         config_paths.append(Path(config_home) / "Claude" / "claude_desktop_config.json")
         config_paths.append(Path(config_home) / "Claude Desktop" / "claude_desktop_config.json")
 
@@ -128,13 +136,12 @@ def find_claude_config(verbose: bool = False):
         appdata = os.environ.get("APPDATA", "")
         default_path = Path(appdata) / "Claude Desktop" / "claude_desktop_config.json"
     else:  # Linux and others
-        config_home = os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")
+        config_home = os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')
         default_path = Path(config_home) / "Claude Desktop" / "claude_desktop_config.json"
 
     if verbose:
         print(f"Claude Desktop config not found. Using default path: {default_path}")
     return default_path
-
 
 def setup_semantic_search(existing_semantic_config: dict | None = None, semantic_config_only_arg: bool = False) -> dict:
     """Interactive setup for semantic search configuration."""
@@ -154,7 +161,7 @@ def setup_semantic_search(existing_semantic_config: dict | None = None, semantic
         print("You can keep it or change it.")
         print("If you change to a new configuration, a database rebuild is advised.")
         print("Would you like to keep your existing configuration? (y/n): ", end="")
-        if input().strip().lower() in ["y", "yes"]:
+        if input().strip().lower() in ['y', 'yes']:
             return existing_semantic_config
 
     print("Configure embedding models for semantic search over your Zotero library.")
@@ -164,15 +171,12 @@ def setup_semantic_search(existing_semantic_config: dict | None = None, semantic
     print("1. Default (all-MiniLM-L6-v2) - Free, runs locally")
     print("2. OpenAI - Better quality, requires API key")
     print("3. Gemini - Better quality, requires API key")
-    print("4. Voyage AI - Better retrieval quality, requires API key")
-    print("5. OpenRouter - OpenAI-compatible router, requires API key")
-    print("6. Local HuggingFace model - Run a Hugging Face Hub model locally")
 
     while True:
-        choice = input("\nChoose embedding model (1-6): ").strip()
-        if choice in ["1", "2", "3", "4", "5", "6"]:
+        choice = input("\nChoose embedding model (1-3): ").strip()
+        if choice in ["1", "2", "3"]:
             break
-        print("Please enter 1, 2, 3, 4, 5, or 6")
+        print("Please enter 1, 2, or 3")
 
     config = {}
 
@@ -217,10 +221,7 @@ def setup_semantic_search(existing_semantic_config: dict | None = None, semantic
     elif choice == "3":
         config["embedding_model"] = "gemini"
 
-        config["embedding_config"] = {
-            "model_name": "gemini-embedding-001",
-            "output_dimensionality": 768,
-        }
+        config["embedding_config"] = {"model_name": "gemini-embedding-001"}
 
         # Get API key
         api_key = getpass.getpass("Enter your Gemini API key (hidden): ").strip()
@@ -236,70 +237,6 @@ def setup_semantic_search(existing_semantic_config: dict | None = None, semantic
             print(f"Using custom Gemini base URL: {base_url}")
         else:
             print("Using default Gemini base URL")
-
-    elif choice == "4":
-        config["embedding_model"] = "voyage"
-
-        config["embedding_config"] = {
-            "model_name": "voyage-4-lite",
-            "request_batch_size": 16,
-            "tokens_per_minute": 10000,
-            "output_dimension": 512,
-        }
-
-        api_key = getpass.getpass("Enter your Voyage API key (hidden): ").strip()
-        if api_key:
-            config["embedding_config"]["api_key"] = api_key
-        else:
-            print("Warning: No API key provided. Set VOYAGE_API_KEY environment variable.")
-
-        base_url = input("Enter custom Voyage base URL (leave blank for default): ").strip()
-        if base_url:
-            config["embedding_config"]["base_url"] = base_url
-            print(f"Using custom Voyage base URL: {base_url}")
-        else:
-            print("Using default Voyage base URL")
-
-    elif choice == "5":
-        config["embedding_model"] = "openrouter"
-
-        default_or_model = "openai/text-embedding-3-small"
-        model_name = input(f"Enter OpenRouter embedding model name [{default_or_model}]: ").strip() or default_or_model
-        config["embedding_config"] = {"model_name": model_name}
-
-        env_or_key = os.environ.get("OPENROUTER_API_KEY", "")
-        prompt_suffix = " (leave blank to use $OPENROUTER_API_KEY)" if env_or_key else ""
-        api_key = getpass.getpass(f"Enter your OpenRouter API key (hidden){prompt_suffix}: ").strip()
-        if api_key:
-            config["embedding_config"]["api_key"] = api_key
-        elif env_or_key:
-            print("Using OPENROUTER_API_KEY from environment.")
-        else:
-            print("Warning: No API key provided. Set OPENROUTER_API_KEY environment variable.")
-
-        base_url = input("Enter custom OpenRouter base URL (leave blank for default): ").strip()
-        if base_url:
-            config["embedding_config"]["base_url"] = base_url
-            print(f"Using custom OpenRouter base URL: {base_url}")
-        else:
-            print("Using default OpenRouter base URL (https://openrouter.ai/api/v1)")
-        print("Note: OpenRouter is a remote service and is not part of local-only mode.")
-
-    elif choice == "6":
-        print("\nLocal HuggingFace model:")
-        print("Enter any sentence-transformers compatible model name from huggingface.co.")
-        print("Examples: intfloat/e5-small-v2, BAAI/bge-small-en-v1.5, Qwen/Qwen3-Embedding-0.6B")
-
-        while True:
-            model_name = input("HuggingFace model name: ").strip()
-            if model_name:
-                break
-            print("Please enter a non-empty model name.")
-
-        config["embedding_model"] = model_name
-        config["embedding_config"] = {"model_name": model_name}
-        print(f"Using local HuggingFace model: {model_name}")
-        print("The first run will download the model weights from Hugging Face Hub.")
 
     # Configure update frequency
     print("\n=== Database Update Configuration ===")
@@ -318,13 +255,23 @@ def setup_semantic_search(existing_semantic_config: dict | None = None, semantic
     update_config = {}
 
     if update_choice == "1":
-        update_config = {"auto_update": False, "update_frequency": "manual"}
+        update_config = {
+            "auto_update": False,
+            "update_frequency": "manual"
+        }
         print("Database will only be updated manually.")
     elif update_choice == "2":
-        update_config = {"auto_update": True, "update_frequency": "startup"}
+        update_config = {
+            "auto_update": True,
+            "update_frequency": "startup"
+        }
         print("Database will be updated every time the server starts.")
     elif update_choice == "3":
-        update_config = {"auto_update": True, "update_frequency": "daily", "update_days": None}
+        update_config = {
+            "auto_update": True,
+            "update_frequency": "daily",
+            "update_days": None
+        }
         print("Database will be updated once per day.")
     elif update_choice == "4":
         while True:
@@ -336,16 +283,18 @@ def setup_semantic_search(existing_semantic_config: dict | None = None, semantic
             except ValueError:
                 print("Please enter a valid number")
 
-        update_config = {"auto_update": True, "update_frequency": f"every_{days}", "update_days": days}
+        update_config = {
+            "auto_update": True,
+            "update_frequency": f"every_{days}",
+            "update_days": days
+        }
         print(f"Database will be updated every {days} days.")
 
     # Configure extraction settings
     print("\n=== Content Extraction Settings ===")
     print("Set a page cap for PDF extraction to balance speed vs. coverage.")
     print("Press Enter to use the default.")
-    default_pdf_max = (
-        existing_semantic_config.get("extraction", {}).get("pdf_max_pages", 10) if existing_semantic_config else 10
-    )
+    default_pdf_max = existing_semantic_config.get("extraction", {}).get("pdf_max_pages", 10) if existing_semantic_config else 10
     while True:
         raw = input(f"PDF max pages [{default_pdf_max}]: ").strip()
         if raw == "":
@@ -390,13 +339,6 @@ def setup_semantic_search(existing_semantic_config: dict | None = None, semantic
     # behavior. The flag is ignored in local mode (ZOTERO_LOCAL=true uses
     # local sqlite extraction).
     config.setdefault("include_fulltext", True)
-    # Chunk every indexed document into overlapping token windows. 1500/225
-    # fits comfortably in OpenAI text-embedding-3-small, SiliconFlow bge-m3,
-    # and keeps paragraph-level localization intact.
-    config.setdefault("chunking", {"window": 1500, "overlap": 225})
-    # Set to a positive float (e.g. 2.0) when driving a rate-limited
-    # OpenAI-compatible endpoint such as SiliconFlow free tier.
-    config.setdefault("embedding_rate_limit_rps", None)
     if zotero_db_path:
         config["zotero_db_path"] = zotero_db_path
 
@@ -423,8 +365,9 @@ def save_semantic_search_config(config: dict, semantic_config_path: Path) -> boo
         full_semantic_config["semantic_search"] = config
 
         # Write config
-        with open(semantic_config_path, "w") as f:
+        with open(semantic_config_path, 'w') as f:
             json.dump(full_semantic_config, f, indent=2)
+        _restrict_file_permissions(semantic_config_path)
 
         print(f"Semantic search configuration saved to: {semantic_config_path}")
         return True
@@ -432,7 +375,6 @@ def save_semantic_search_config(config: dict, semantic_config_path: Path) -> boo
     except Exception as e:
         print(f"Error saving semantic search config: {e}")
         return False
-
 
 def load_semantic_search_config(semantic_config_path: Path) -> dict:
     """Load existing semantic search configuration."""
@@ -451,9 +393,7 @@ def load_semantic_search_config(semantic_config_path: Path) -> dict:
         return {}
 
 
-def update_claude_config(
-    config_path, zotero_mcp_path, local=True, api_key=None, library_id=None, library_type="user", semantic_config=None
-):
+def update_claude_config(config_path, zotero_mcp_path, local=True, api_key=None, library_id=None, library_type="user", semantic_config=None):
     """Update Claude Desktop config to add zotero-mcp."""
     # Create directory if it doesn't exist
     config_dir = config_path.parent
@@ -477,7 +417,9 @@ def update_claude_config(
         config["mcpServers"] = {}
 
     # Create environment settings based on local vs web API
-    env_settings = {"ZOTERO_LOCAL": "true" if local else "false"}
+    env_settings = {
+        "ZOTERO_LOCAL": "true" if local else "false"
+    }
 
     # Add API key and library settings for web API
     if not local:
@@ -509,21 +451,17 @@ def update_claude_config(
             if base_url := embedding_config.get("base_url"):
                 env_settings["GEMINI_BASE_URL"] = base_url
 
-        elif semantic_config.get("embedding_model") == "voyage":
-            if api_key := embedding_config.get("api_key"):
-                env_settings["VOYAGE_API_KEY"] = api_key
-            if model := embedding_config.get("model_name"):
-                env_settings["VOYAGE_EMBEDDING_MODEL"] = model
-            if base_url := embedding_config.get("base_url"):
-                env_settings["VOYAGE_BASE_URL"] = base_url
-
     # Add or update zotero config
-    config["mcpServers"]["zotero"] = {"command": zotero_mcp_path, "env": env_settings}
+    config["mcpServers"]["zotero"] = {
+        "command": zotero_mcp_path,
+        "env": env_settings
+    }
 
     # Write updated config
     try:
-        with open(config_path, "w") as f:
+        with open(config_path, 'w') as f:
             json.dump(config, f, indent=2)
+        _restrict_file_permissions(config_path)
         print(f"\nSuccessfully wrote config to: {config_path}")
     except Exception as e:
         print(f"Error writing config file: {str(e)}")
@@ -532,9 +470,7 @@ def update_claude_config(
     return config_path
 
 
-def _write_standalone_config(
-    local: bool, api_key: str, library_id: str, library_type: str, semantic_config: dict, no_claude: bool = False
-) -> Path:
+def _write_standalone_config(local: bool, api_key: str, library_id: str, library_type: str, semantic_config: dict, no_claude: bool = False) -> Path:
     """Write a central config file used by semantic search and provide client env."""
     cfg_dir = Path.home() / ".config" / "zotero-mcp"
     cfg_dir.mkdir(parents=True, exist_ok=True)
@@ -554,7 +490,9 @@ def _write_standalone_config(
         full["semantic_search"] = semantic_config
 
     # Provide a helper env section for web-based clients
-    client_env = {"ZOTERO_LOCAL": "true" if local else "false"}
+    client_env = {
+        "ZOTERO_LOCAL": "true" if local else "false"
+    }
     # Persist global guard to disable Claude detection/output if requested
     if no_claude:
         client_env["ZOTERO_NO_CLAUDE"] = "true"
@@ -568,8 +506,9 @@ def _write_standalone_config(
 
     full["client_env"] = client_env
 
-    with open(cfg_path, "w") as f:
+    with open(cfg_path, 'w') as f:
         json.dump(full, f, indent=2)
+    _restrict_file_permissions(cfg_path)
 
     return cfg_path
 
@@ -578,27 +517,25 @@ def main(cli_args=None):
     """Main function to run the setup helper."""
     parser = argparse.ArgumentParser(description="Configure zotero-mcp for Claude Desktop")
     parser.add_argument("--no-local", action="store_true", help="Configure for Zotero Web API instead of local API")
-    parser.add_argument(
-        "--no-claude",
-        action="store_true",
-        help="Don't setup Claude Desktop config: instead store settings in config file.",
-    )
-    parser.add_argument("--api-key", help="Zotero API key (only needed with --no-local)")
+    parser.add_argument("--no-claude", action="store_true", help="Don't setup Claude Desktop config: instead store settings in config file.")
+    parser.add_argument("--api-key",
+                        help="Zotero API key (only needed with --no-local). Insecure on "
+                             "multi-user systems — leaks via 'ps'/shell history; omit to be "
+                             "prompted securely or set the ZOTERO_API_KEY env var.")
     parser.add_argument("--library-id", help="Zotero library ID (only needed with --no-local)")
-    parser.add_argument(
-        "--library-type",
-        choices=["user", "group"],
-        default="user",
-        help="Zotero library type (only needed with --no-local)",
-    )
+    parser.add_argument("--library-type", choices=["user", "group"], default="user",
+                        help="Zotero library type (only needed with --no-local)")
     parser.add_argument("--config-path", help="Path to Claude Desktop config file")
-    parser.add_argument("--skip-semantic-search", action="store_true", help="Skip semantic search configuration")
-    parser.add_argument(
-        "--semantic-config-only", action="store_true", help="Only configure semantic search, skip Zotero setup"
-    )
+    parser.add_argument("--skip-semantic-search", action="store_true",
+                        help="Skip semantic search configuration")
+    parser.add_argument("--semantic-config-only", action="store_true",
+                        help="Only configure semantic search, skip Zotero setup")
+    parser.add_argument("--show-secrets", action="store_true",
+                        help="Print secrets (e.g. the Zotero API key) in plaintext in the "
+                             "setup summary. Off by default; values are masked.")
 
     # If this is being called from CLI with existing args
-    if cli_args is not None and hasattr(cli_args, "no_local"):
+    if cli_args is not None and hasattr(cli_args, 'no_local'):
         args = cli_args
         print("Using arguments passed from command line")
     else:
@@ -657,6 +594,18 @@ def main(cli_args=None):
     library_id = args.library_id
     library_type = args.library_type
 
+    # Web mode needs an API key. Prefer the env var, then prompt securely —
+    # avoid forcing it onto the command line (where it leaks via ps/history).
+    if not use_local and not api_key:
+        api_key = os.environ.get("ZOTERO_API_KEY")
+        if not api_key:
+            try:
+                api_key = getpass.getpass(
+                    "Enter your Zotero API key (hidden, input not echoed): "
+                ).strip()
+            except (EOFError, KeyboardInterrupt):
+                api_key = None
+
     # Configure semantic search if not skipped
     if not args.skip_semantic_search:
         # if there is already a semantic search configuration in the config file:
@@ -667,7 +616,7 @@ def main(cli_args=None):
         else:
             print("\nWould you like to configure semantic search? (y/n): ", end="")
         # Either way:
-        if input().strip().lower() in ["y", "yes"]:
+        if input().strip().lower() in ['y', 'yes']:
             new_semantic_config = setup_semantic_search(existing_semantic_config)
             if existing_semantic_config != new_semantic_config:
                 semantic_config_changed = True
@@ -693,17 +642,30 @@ def main(cli_args=None):
                 library_id=library_id,
                 library_type=library_type,
                 semantic_config=semantic_config,
-                no_claude=args.no_claude,
+                no_claude=args.no_claude
             )
             print("\nSetup complete (standalone/web mode)!")
             print(f"Config saved to: {cfg_path}")
-            # Emit one-line client_env for easy copy/paste
+            # Emit one-line client_env for easy copy/paste. Mask the API key
+            # by default — single-line JSON is exactly what gets pasted into
+            # bug reports / shared terminals; only print it in full on request.
             try:
                 with open(cfg_path) as f:
                     full = json.load(f)
-                env_line = json.dumps(full.get("client_env", {}), separators=(",", ":"))
+                client_env = full.get("client_env", {})
+                show_secrets = getattr(args, "show_secrets", False)
+                if show_secrets:
+                    display_env = client_env
+                else:
+                    display_env = dict(client_env)
+                    if display_env.get("ZOTERO_API_KEY"):
+                        display_env["ZOTERO_API_KEY"] = _obfuscate_sensitive(
+                            display_env["ZOTERO_API_KEY"]
+                        )
                 print("Client environment (single-line JSON):")
-                print(env_line)
+                print(json.dumps(display_env, separators=(',', ':')))
+                if not show_secrets and client_env.get("ZOTERO_API_KEY"):
+                    print("  (API key masked — re-run with --show-secrets to print it in full)")
             except Exception:
                 pass
             if semantic_config_changed:
@@ -718,7 +680,7 @@ def main(cli_args=None):
                 api_key=api_key,
                 library_id=library_id,
                 library_type=library_type,
-                semantic_config=semantic_config,
+                semantic_config=semantic_config
             )
             if updated_config_path:
                 print("\nSetup complete!")
@@ -744,9 +706,7 @@ def main(cli_args=None):
                     if not library_id:
                         missing.append("Library ID")
                     if missing:
-                        print(
-                            f"\nWarning: The following required settings for Web API were not provided: {', '.join(missing)}"
-                        )
+                        print(f"\nWarning: The following required settings for Web API were not provided: {', '.join(missing)}")
                         print("You may need to set these as environment variables or reconfigure.")
                 return 0
             else:

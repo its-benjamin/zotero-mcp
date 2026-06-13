@@ -25,7 +25,8 @@ async def test_lifespan_yields_before_sync_update_completes():
             assert ctx == {}
             # Yield to the event loop so the background task can start.
             await asyncio.sleep(0.1)
-            assert entered.is_set(), "_sync_semantic_update was never called in the background"
+            assert entered.is_set(), \
+                "_sync_semantic_update was never called in the background"
         proceed.set()
 
 

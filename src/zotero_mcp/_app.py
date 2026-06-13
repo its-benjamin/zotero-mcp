@@ -1,10 +1,12 @@
 """FastMCP application instance and server lifecycle."""
 
 import asyncio
+import json
 import logging
 import os
 import sys
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastmcp import FastMCP
 
@@ -22,12 +24,23 @@ logging.basicConfig(
 
 def _sync_semantic_update() -> None:
     """Check for and run semantic search auto-update (called in a worker thread)."""
-    from zotero_mcp.config import get_config_path
     from zotero_mcp.semantic_search import create_semantic_search
 
-    config_path = get_config_path()
+    config_path = Path.home() / ".config" / "zotero-mcp" / "config.json"
     if not config_path.exists():
         return
+
+    # Avoid initializing ChromaDB on every server startup when semantic
+    # auto-update is disabled. This also avoids racing a foreground
+    # zotero_semantic_search call for the same persisted ChromaDB directory.
+    try:
+        with open(config_path) as f:
+            cfg = json.load(f)
+        update_cfg = cfg.get("semantic_search", {}).get("update_config", {})
+        if not update_cfg.get("auto_update", False):
+            return
+    except Exception:
+        pass
 
     search = create_semantic_search(str(config_path))
     if not search.should_update_database():
@@ -35,7 +48,9 @@ def _sync_semantic_update() -> None:
 
     sys.stderr.write("Auto-updating semantic search database...\n")
     stats = search.update_database(extract_fulltext=is_local_mode())
-    sys.stderr.write(f"Database update completed: {stats.get('processed_items', 0)} items processed\n")
+    sys.stderr.write(
+        f"Database update completed: {stats.get('processed_items', 0)} items processed\n"
+    )
 
 
 @asynccontextmanager
@@ -61,17 +76,11 @@ async def server_lifespan(server: FastMCP):
         except Exception as e:
             sys.stderr.write(f"Warning: Could not check semantic search auto-update: {e}\n")
 
-    update_task = asyncio.create_task(_background_update())
+    asyncio.create_task(_background_update())
 
-    try:
-        yield {}
-    finally:
-        if not update_task.done():
-            update_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await update_task
+    yield {}
 
-        sys.stderr.write("Shutting down Zotero MCP server...\n")
+    sys.stderr.write("Shutting down Zotero MCP server...\n")
 
 
 # Create an MCP server (fastmcp 2.14+ no longer accepts `dependencies`)
