@@ -8,7 +8,6 @@ import threading as _threading
 import time as _time
 from typing import Literal
 
-from fastmcp.server.dependencies import is_docket_available
 from mcp.types import ToolAnnotations
 
 from zotero_mcp import client as _client
@@ -1021,7 +1020,7 @@ async def semantic_search(
         "to make them immediately available for semantic search. Also useful if the "
         "user has added items directly in Zotero since the last update."
     ),
-    task=True if is_docket_available() else None,
+
 )
 @with_zotero_api_lock
 async def update_search_database(force_rebuild: bool = False, limit: int | None = None, *, ctx: Context) -> str:

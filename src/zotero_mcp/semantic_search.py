@@ -26,7 +26,7 @@ except Exception:
 from .chroma_client import ChromaClient, create_chroma_client
 from .client import get_zotero_client
 from .local_db import LocalZoteroReader
-from .utils import format_creators, is_local_mode
+from .utils import format_creators, is_local_mode, suppress_stdout
 
 logger = logging.getLogger(__name__)
 
@@ -62,9 +62,6 @@ def _acquire_update_lock(lock_path: Path):
     finally:
         if fd is not None:
             fd.close()
-
-
-from zotero_mcp.utils import suppress_stdout
 
 
 def _truncate_to_tokens(text: str, max_tokens: int = 8000) -> str:
