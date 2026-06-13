@@ -64,10 +64,43 @@ class TTLCache:
         return len(self._cache)
 
 
-# Global cache instance for item metadata
-_item_cache = TTLCache(ttl_seconds=300, max_size=256)
+# Global cache instances — one per resource type for independent TTLs
+_item_cache = TTLCache(ttl_seconds=300, max_size=1024)
+_children_cache = TTLCache(ttl_seconds=300, max_size=512)
+_collections_cache = TTLCache(ttl_seconds=600, max_size=256)
+_tags_cache = TTLCache(ttl_seconds=600, max_size=128)
+_annotations_cache = TTLCache(ttl_seconds=120, max_size=256)
 
 
 def get_item_cache() -> TTLCache:
     """Return the global item metadata cache."""
     return _item_cache
+
+
+def get_children_cache() -> TTLCache:
+    """Return the global item-children cache."""
+    return _children_cache
+
+
+def get_collections_cache() -> TTLCache:
+    """Return the global collections-list cache."""
+    return _collections_cache
+
+
+def get_tags_cache() -> TTLCache:
+    """Return the global tags-list cache."""
+    return _tags_cache
+
+
+def get_annotations_cache() -> TTLCache:
+    """Return the global annotations cache."""
+    return _annotations_cache
+
+
+def invalidate_all_caches() -> None:
+    """Clear every global cache — called after write operations."""
+    _item_cache.clear()
+    _children_cache.clear()
+    _collections_cache.clear()
+    _tags_cache.clear()
+    _annotations_cache.clear()

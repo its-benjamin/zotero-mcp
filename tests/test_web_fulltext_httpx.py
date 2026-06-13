@@ -82,3 +82,33 @@ def test_attach_web_fulltext_falls_back_when_httpx_unavailable(monkeypatch):
     search._attach_web_fulltext(items)
 
     assert fallback_calls == [(items, 1)]
+
+def test_attach_web_fulltext_invalid_rate_env_uses_safe_default(monkeypatch):
+    monkeypatch.setenv("ZOTERO_MCP_RATE_ZOTERO_WINDOW_SECONDS", "-1")
+    monkeypatch.setenv("ZOTERO_API_KEY", "secret")
+    intervals = []
+    search = _search(monkeypatch)
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    async def fake_fetch(client, base_items_url, key, limiter, min_interval, next_allowed):
+        intervals.append(min_interval)
+        return "Body text", "web-api:parent"
+
+    monkeypatch.setattr(semantic_search.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(search, "_fetch_fulltext_via_httpx", fake_fetch)
+
+    fetched = semantic_search.asyncio.run(
+        search._attach_web_fulltext_httpx_async([_paper("A")], search._web_api_config(), workers=1)
+    )
+
+    assert fetched == 1
+    assert intervals == [1 / 6]

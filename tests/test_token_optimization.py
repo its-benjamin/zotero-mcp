@@ -109,10 +109,12 @@ class TestDetailParameter:
 
         result = await get_collection_items(collection_key="COL1", detail="keys_only", ctx=dummy_ctx)
 
-        assert "`P1`" in result
-        assert "`P2`" in result
+        assert "**Item Key:** P1" in result
+        assert "**Item Key:** P2" in result
+        assert "**Title:** Paper One" in result
+        assert "**Date:** 2024" in result
+        assert "**Attachments:** PDF, Notes" in result
         assert "Paper One" in result
-        assert "[PDF" in result  # P1 has a PDF
         assert "Notes" in result  # P1 has a note
         # Should NOT contain abstract
         assert "depression treatment" not in result
@@ -172,7 +174,7 @@ class TestAttachmentSummary:
         # P1 has a PDF attachment
         lines = result.split("\n")
         p1_line = [line for line in lines if "P1" in line][0]
-        assert "PDF" in p1_line
+        assert "**Attachments:** PDF" in p1_line
 
     @pytest.mark.asyncio
     async def test_notes_indicator(self, monkeypatch, coll_zot, dummy_ctx):

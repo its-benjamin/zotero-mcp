@@ -21,27 +21,6 @@ logger = logging.getLogger(__name__)
 _EXTRACTION_TIMEOUT = "__EXTRACTION_TIMEOUT__"
 
 
-def _extract_pdf_worker(file_path: str, maxpages: int, result_queue):
-    """Legacy worker — kept for backward compatibility but no longer used.
-
-    The actual extraction now uses subprocess.run (see _extract_text_from_pdf)
-    to avoid a deadlock on macOS where multiprocessing's 'spawn' start method
-    re-imports the zotero_mcp package, triggering FastMCP server initialization
-    in the child process. See https://github.com/54yyyu/zotero-mcp/issues/178
-    """
-    try:
-        import logging as _logging
-
-        _logging.getLogger("pdfminer").setLevel(_logging.ERROR)
-
-        from pdfminer.high_level import extract_text
-
-        text = extract_text(file_path, maxpages=maxpages) or ""
-        result_queue.put(text)
-    except Exception:
-        result_queue.put("")
-
-
 @dataclass
 class ZoteroItem:
     """Represents a Zotero item with text content for semantic search."""
@@ -102,7 +81,15 @@ class LocalZoteroReader:
     without going through the Zotero API.
     """
 
-    def __init__(self, db_path: str | None = None, pdf_max_pages: int | None = None, pdf_timeout: int = 30):
+    def __init__(
+        self,
+        db_path: str | None = None,
+        pdf_max_pages: int | None = None,
+        pdf_timeout: int = 30,
+        pdf_backend: str | None = None,
+        pdf_use_ocr: bool = False,
+        paddleocr_lang: str | None = None,
+    ):
         """
         Initialize the local database reader.
 
@@ -110,11 +97,21 @@ class LocalZoteroReader:
             db_path: Optional path to zotero.sqlite. If None, auto-detect.
             pdf_max_pages: Maximum pages to extract from PDFs.
             pdf_timeout: Seconds to wait for PDF extraction before killing the process.
+            pdf_backend: PDF text extraction backend (``pdfminer``, ``pymupdf4llm``, or ``paddleocr``).
+            pdf_use_ocr: Whether the ``pymupdf4llm`` backend may run OCR.
+            paddleocr_lang: Language code for PaddleOCR (e.g. 'en', 'ch', 'japan'). None for auto-detect.
         """
         self.db_path = db_path or self._find_zotero_db()
         self._connection: sqlite3.Connection | None = None
         self.pdf_max_pages: int | None = pdf_max_pages
         self.pdf_timeout: int = pdf_timeout
+        self.pdf_backend = (pdf_backend or os.getenv("ZOTERO_PDF_BACKEND") or "pdfminer").strip().lower()
+        self.pdf_use_ocr = pdf_use_ocr or os.getenv("ZOTERO_PDF_USE_OCR", "").strip().lower() in {
+            "true",
+            "yes",
+            "1",
+        }
+        self.paddleocr_lang = paddleocr_lang or os.getenv("ZOTERO_PADDLEOCR_LANG") or None
         # Reduce noise from pdfminer warnings
         try:
             logging.getLogger("pdfminer").setLevel(logging.ERROR)
@@ -267,7 +264,7 @@ class LocalZoteroReader:
         return None
 
     def _extract_text_from_pdf(self, file_path: Path) -> str:
-        """Extract text from a PDF using pdfminer in a subprocess with timeout.
+        """Extract text from a PDF using the configured backend with timeout.
 
         Uses subprocess.run instead of multiprocessing.Process to avoid a
         deadlock on macOS: multiprocessing's 'spawn' start method re-imports
@@ -277,6 +274,8 @@ class LocalZoteroReader:
 
         See: https://github.com/54yyyu/zotero-mcp/issues/178
 
+        If the primary backend returns near-empty text and PaddleOCR is
+        available, automatically retries with PaddleOCR for scanned PDFs.
 
         Returns the extracted text, empty string on failure, or
         _EXTRACTION_TIMEOUT sentinel if the process was killed due to timeout.
@@ -296,36 +295,117 @@ class LocalZoteroReader:
 
         timeout = self.pdf_timeout or 30
 
-        # Inline pdfminer script — imports ONLY pdfminer, not zotero_mcp,
-        # so the child process never triggers FastMCP initialization.
-        script = (
-            "import sys, logging; "
-            "logging.getLogger('pdfminer').setLevel(logging.ERROR); "
-            "from pdfminer.high_level import extract_text; "
-            "sys.stdout.write(extract_text(sys.argv[1], maxpages=int(sys.argv[2])) or '')"
-        )
+        # If paddleocr is the configured backend, use it directly.
+        if self.pdf_backend in {"paddleocr", "paddle"}:
+            extracted = self._extract_text_from_pdf_paddleocr(file_path, maxpages, timeout)
+            if extracted:
+                return extracted
+            if extracted == _EXTRACTION_TIMEOUT:
+                return extracted
+            logger.warning(f"paddleocr PDF extraction failed; falling back to pdfminer: {file_path.name}")
 
-        try:
-            result = subprocess.run(
-                [sys.executable, "-c", script, str(file_path), str(maxpages)],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
+        # Primary backend: pymupdf4llm or pdfminer
+        primary_result = ""
+        if self.pdf_backend in {"pymupdf4llm", "pymupdf-llm", "llm"}:
+            primary_result = self._extract_text_from_pdf_pymupdf4llm(file_path, maxpages, timeout, self.pdf_use_ocr)
+            if primary_result == _EXTRACTION_TIMEOUT:
+                return primary_result
+            if not primary_result:
+                logger.warning(f"pymupdf4llm PDF extraction failed; falling back to pdfminer: {file_path.name}")
+
+        if not primary_result:
+            # Inline pdfminer script — imports ONLY pdfminer, not zotero_mcp,
+            # so the child process never triggers FastMCP initialization.
+            script = (
+                "import sys, logging; "
+                "logging.getLogger('pdfminer').setLevel(logging.ERROR); "
+                "from pdfminer.high_level import extract_text; "
+                "sys.stdout.write(extract_text(sys.argv[1], maxpages=int(sys.argv[2])) or '')"
             )
-            if result.returncode == 0:
-                return result.stdout
+
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-c", script, str(file_path), str(maxpages)],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+                if result.returncode == 0:
+                    primary_result = result.stdout
+                else:
+                    logger.warning(
+                        f"PDF extraction failed (exit {result.returncode}): {file_path.name}: "
+                        f"{result.stderr[:200] if result.stderr else 'no error output'}"
+                    )
+                    return ""
+            except subprocess.TimeoutExpired:
+                sys.stderr.write(f"\r{' ' * 120}\r")
+                logger.warning(f"PDF extraction timed out after {timeout}s: {file_path.name}")
+                return _EXTRACTION_TIMEOUT
+            except Exception as e:
+                sys.stderr.write(f"\r{' ' * 120}\r")
+                logger.warning(f"PDF extraction failed: {file_path.name}: {e}")
+                return ""
+
+        # Auto-fallback: if primary returned very little text for a multi-page
+        # PDF, it's likely scanned/image-only. Retry with PaddleOCR silently.
+        _MIN_TEXT_PER_PAGE = 20
+        if (
+            primary_result
+            and self.pdf_backend not in {"paddleocr", "paddle"}
+            and len(primary_result.strip()) < maxpages * _MIN_TEXT_PER_PAGE
+        ):
+            logger.info(
+                f"Primary backend returned little text ({len(primary_result.strip())} chars) "
+                f"for {file_path.name}; trying PaddleOCR fallback"
+            )
+            ocr_result = self._extract_text_from_pdf_paddleocr(file_path, maxpages, timeout)
+            if ocr_result and len(ocr_result.strip()) > len(primary_result.strip()):
+                return ocr_result
+
+        return primary_result
+
+    def _extract_text_from_pdf_pymupdf4llm(
+        self, file_path: Path, maxpages: int, timeout: int, use_ocr: bool = False
+    ) -> str:
+        """Extract Markdown from PDF via optional pymupdf4llm backend.
+
+        This runs in-process. On Windows MCP stdio servers, piping
+        pymupdf4llm through subprocess.run can hang joining pipe reader
+        threads even after the child exits. Page caps and OCR-off defaults
+        keep this bounded for normal agent reads.
+        """
+        try:
+            import pymupdf4llm
+
+            pages = list(range(maxpages)) if maxpages > 0 else None
+            return pymupdf4llm.to_markdown(str(file_path), pages=pages, use_ocr=use_ocr) or ""
+        except Exception as e:
+            logger.warning(f"pymupdf4llm PDF extraction failed: {file_path.name}: {e}")
+            return ""
+
+    def _extract_text_from_pdf_paddleocr(self, file_path: Path, maxpages: int, timeout: int) -> str:
+        """Extract text from PDF using PaddleOCR PP-OCRv6.
+
+        Renders pages to images via PyMuPDF, then runs PaddleOCR on each.
+        Falls back to empty string on failure so the caller can retry with pdfminer.
+        """
+        try:
+            from zotero_mcp.paddleocr_backend import extract_text_from_pdf_paddleocr
+
+            return extract_text_from_pdf_paddleocr(
+                file_path,
+                maxpages,
+                timeout,
+                lang=self.paddleocr_lang,
+            )
+        except ImportError:
             logger.warning(
-                f"PDF extraction failed (exit {result.returncode}): {file_path.name}: "
-                f"{result.stderr[:200] if result.stderr else 'no error output'}"
+                f"PaddleOCR not installed (pip install paddlepaddle paddleocr): {file_path.name}"
             )
             return ""
-        except subprocess.TimeoutExpired:
-            sys.stderr.write(f"\r{' ' * 120}\r")  # Clear progress line before warning
-            logger.warning(f"PDF extraction timed out after {timeout}s: {file_path.name}")
-            return _EXTRACTION_TIMEOUT
         except Exception as e:
-            sys.stderr.write(f"\r{' ' * 120}\r")  # Clear progress line before warning
-            logger.warning(f"PDF extraction failed: {file_path.name}: {e}")
+            logger.warning(f"PaddleOCR PDF extraction failed: {file_path.name}: {e}")
             return ""
 
     def _extract_text_from_html(self, file_path: Path) -> str:
@@ -400,6 +480,44 @@ class LocalZoteroReader:
             else ("html" if target.suffix.lower() in {".html", ".htm"} else "file")
         )
         return (text, source)
+
+    def get_saved_searches(self) -> list[dict[str, Any]]:
+        """Get all saved searches from the local database."""
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                "SELECT savedSearchID, name, key, version FROM savedSearches "
+                "WHERE savedSearchID NOT IN (SELECT savedSearchID FROM deletedItems) "
+                "ORDER BY name"
+            )
+            searches = []
+            for row in cursor.fetchall():
+                search_id, name, key, version = row
+                # Get conditions for this search
+                cond_cursor = conn.execute(
+                    "SELECT condition, operator, value, required FROM savedSearchConditions "
+                    "WHERE savedSearchID = ? ORDER BY searchConditionID",
+                    (search_id,),
+                )
+                conditions = []
+                for cond_row in cond_cursor.fetchall():
+                    conditions.append({
+                        "condition": cond_row[0] or "",
+                        "operator": cond_row[1] or "",
+                        "value": cond_row[2] or "",
+                        "required": cond_row[3] or "",
+                    })
+                searches.append({
+                    "id": search_id,
+                    "name": name,
+                    "key": key,
+                    "version": version,
+                    "conditions": conditions,
+                })
+            return searches
+        except Exception as e:
+            logger.warning(f"Failed to get saved searches: {e}")
+            return []
 
     def close(self):
         """Close database connection."""
@@ -607,7 +725,8 @@ class LocalZoteroReader:
         """
 
         if limit:
-            query += f" LIMIT {limit}"
+            query += " LIMIT ?"
+            params.append(limit)
 
         cursor = conn.execute(query, params)
         items = []
@@ -665,6 +784,36 @@ class LocalZoteroReader:
                 }
             )
         return out
+
+    def get_attachment_path_by_key(self, attachment_key: str) -> dict | None:
+        """Return resolved filesystem path metadata for one attachment key."""
+        conn = self._get_connection()
+        row = conn.execute(
+            """
+            SELECT ia.itemID as attachmentItemID,
+                   ia.parentItemID as parentItemID,
+                   ia.path as path,
+                   ia.contentType as contentType,
+                   att.key as attachmentKey,
+                   parent.key as parentKey
+            FROM itemAttachments ia
+            JOIN items att ON att.itemID = ia.itemID
+            LEFT JOIN items parent ON parent.itemID = ia.parentItemID
+            WHERE att.key = ?
+            """,
+            (attachment_key,),
+        ).fetchone()
+        if not row:
+            return None
+        resolved = self._resolve_attachment_path(row["attachmentKey"], row["path"] or "")
+        return {
+            "key": row["attachmentKey"],
+            "parent_key": row["parentKey"],
+            "content_type": row["contentType"],
+            "zotero_path": row["path"],
+            "resolved_path": resolved,
+            "exists": bool(resolved and resolved.exists()),
+        }
 
     def get_item_by_key(self, key: str) -> ZoteroItem | None:
         """

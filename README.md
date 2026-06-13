@@ -29,32 +29,63 @@ This fork is released from GitHub only. It is not published to PyPI; install it 
 
 ## 🔀 What's different in this fork
 
-This is a fork of [54yyyu/zotero-mcp](https://github.com/54yyyu/zotero-mcp) with a focus on reliability, performance, and extra tooling.
+This is a heavily enhanced fork of [54yyyu/zotero-mcp](https://github.com/54yyyu/zotero-mcp) (the original). The original is a solid MCP server with ~30 core tools. This fork expands that to **80+ tools**, fixes dozens of bugs, and adds significant new capabilities.
 
-**More reliable Zotero access**
-- Automatic retry with backoff on transient errors (429 rate limits, 503 service unavailable, timeouts, connection drops). Long-running indexing jobs no longer fail silently when the Zotero API briefly hiccups.
-- Local Zotero database access serialized with a re-entrant async lock — no more nested-call deadlocks when tools call each other.
+### Summary of changes vs original
 
-**Faster search and indexing**
-- Full-text search for notes and annotations powered by an SQLite FTS5 sidecar index, instead of slow `LIKE '%query%'` scans. Queries on large libraries return in milliseconds.
-- In-memory cache for item metadata so repeated lookups during a session don't re-hit the API.
-- Semantic indexing extracts PDFs in parallel (ThreadPoolExecutor), cutting full-library index time noticeably on multi-core machines.
+| Area | Original | This Fork |
+|------|----------|-----------|
+| Tools | ~30 | **80+** |
+| Resources | 2 | **8** |
+| Prompts | 5 | **16** |
+| PDF backends | pdfminer | pdfminer + pymupdf4llm + **PaddleOCR PP-OCRv6** |
+| Embedding providers | OpenAI, Gemini, Voyage | + **OpenRouter**, **local HuggingFace models** |
+| Search | Basic LIKE queries | **FTS5 full-text index** (milliseconds on large libraries) |
+| Saved searches | Not supported | **List, execute, create, delete** |
+| Bibliography export | Not supported | **Generate formatted bibliography** (APA, Chicago, IEEE, 1000+ CSL styles) |
+| Item export | Not supported | **Export in 13 formats** (BibTeX, RIS, CSL JSON, TEI, etc.) |
+| Trash management | Not supported | **List trash, restore items** |
+| Collection management | Basic | **Rename, delete, move items, search, get tags** |
+| Tag management | Basic | **Rename, merge, delete, batch update** |
+| Item relations | Not supported | **Relate/unrelate items** |
+| Batch operations | Not supported | **Batch add by DOI, batch delete, batch tag update** |
+| Library switching | Not supported | **Switch between user/group libraries** |
+| Publication lookup | Not supported | **Get publications, library changes, recent changes** |
+| CLI commands | serve, setup | + **build-fts, search, export, doctor** |
 
-**More embedding providers for semantic search**
-- **OpenRouter** — OpenAI-compatible router, gives you access to many embedding models behind one API key.
-- **Local HuggingFace Hub models** — point at any sentence-transformers model name (e.g. `BAAI/bge-small-en-v1.5`, `intfloat/e5-small-v2`, `Qwen/Qwen3-Embedding-0.6B`) for fully local, private embeddings. No API key, no data leaves your machine.
+### Bug fixes over original (31+)
 
-**New library management tools**
-- `zotero_move_item` — move an item between collections in a single call (instead of remove + add).
-- `zotero_rename_tag` — rename a tag across every item that uses it.
+- **30+ blocking pyzotero calls** in async functions wrapped in `run_zotero_call` (prevented event loop stalls)
+- **SQL injection** in local_db.py LIMIT clause (parameterized queries)
+- **Hardcoded library ID `0`** in relation URIs, bibliography, export, saved searches (now dynamic)
+- **library_type suffix bug** (`"user"` vs `"users"`) in annotations for group libraries
+- **Wrong pyzotero method** `update_item` used on collections (→ `update_collection`)
+- **Wrong parameter name** `collection_key` vs `collections` in `batch_add_by_doi`
+- **Wrong validator** `validate_item_key` used for collection keys
+- **Missing `await`** on `_handle_write_response()` calls
+- **Blocking `time.sleep()`** in async context
+- **BibTeX escaping** incomplete (now escapes `&%#_~^$` not just `{}`)
+- **Duplicate dead code** removed (redundant `_extract_pdf_worker`, duplicate PaddleOCR methods)
+- **Config paths** hardcoded in 5+ files (now centralized)
+- **tiktoken encoder** re-imported on every call (now cached)
+- **Collections fetched every time** (now TTL-cached)
 
-**Better setup experience**
-- `zotero-mcp doctor` — one command that checks your config, API key, local Zotero database, FTS sidecar, and semantic index, then tells you what's missing.
-- `zotero-mcp --version` at the root level.
-- Clearer error messages when item keys, collection keys, or tags are malformed — you get "expected 8 alphanumeric characters" instead of an opaque API failure.
+### New MCP resources
 
-**Distribution**
-- Released from GitHub only — install directly from a release tag with uv, pip, or pipx (no PyPI publishing required).
+`library_info`, `collections_list`, `tags_list`, `recent_items`, `library_stats`, `recent_annotations`, `recently_modified`, `saved_searches`
+
+### New MCP prompts
+
+`summarize_paper`, `compare_papers`, `literature_review`, `annotated_bibliography`, `find_relevant_papers`, `prepare_citation_context`, `check_retractions`, `add_papers_by_identifier`, `read_paper_section`, `search_my_notes`, `write_related_work`, `organize_library`, `write_introduction`, `tag_audit`, `extract_key_findings`, `export_for_latex`
+
+### Performance improvements
+
+- In-memory cache for item metadata and collection resolution
+- Parallel PDF rendering (ThreadPoolExecutor) for semantic indexing
+- FTS5 sidecar index for notes/annotations (instant queries vs slow LIKE scans)
+- Cached tiktoken encoder (no re-import per call)
+- Batch enrichment for semantic search
+- TTL cache for `search_collections`
 
 ---
 
@@ -110,6 +141,12 @@ This is a fork of [54yyyu/zotero-mcp](https://github.com/54yyyu/zotero-mcp) with
 - Ideal for scripting, automation, and quick lookups
 - Short aliases (`s`, `g`, `ann`, `coll`) for interactive use
 
+### 🧩 MCP-Native UX
+- Resource templates let clients browse `zotero://item/{item_key}`, item children, collection items, and tag items without extra tool calls
+- Long semantic indexing reports progress and can run as a FastMCP task when installed with `fastmcp[tasks]`
+- Sampling, Roots, Elicitation, and resource-list notifications help AI/CLI clients coordinate safely
+- `zotero_mcp_capabilities` reports implemented and missing MCP/FastMCP features; see `docs/mcp-feature-coverage.md`
+
 ## 🚀 Quick Install
 
 > **New to the command line?** Try the community-built [Zotero MCP Setup](https://github.com/ehawkin/zotero-mcp-setup) — includes a macOS GUI installer (DMG), one-click install scripts for Mac/Windows, and a step-by-step guide. No Terminal experience needed.
@@ -121,25 +158,25 @@ The base install is lightweight — it includes search, metadata retrieval, anno
 #### Installing from GitHub via uv (recommended)
 
 ```bash
-uv tool install git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.5
+uv tool install git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6
 zotero-mcp setup  # Auto-configure (Claude Desktop supported)
 ```
 
 #### Installing from GitHub via pip
 
 ```bash
-pip install "zotero-mcp-server @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.5"
+pip install "zotero-mcp-server @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6"
 zotero-mcp setup  # Auto-configure (Claude Desktop supported)
 ```
 
 #### Installing from GitHub via pipx
 
 ```bash
-pipx install git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.5
+pipx install git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6
 zotero-mcp setup  # Auto-configure (Claude Desktop supported)
 ```
 
-> **Want the newest development build instead of the pinned release?** Replace `@v0.3.5` with `@main`. Use `@v0.3.5` for normal installs because it is the tested release tag.
+> **Want the newest development build instead of the pinned release?** Replace `@v0.3.6` with `@main`. Use `@v0.3.6` for normal installs because it is the tested release tag.
 
 ### Optional Extras
 
@@ -147,14 +184,15 @@ Heavy ML/PDF dependencies are separated into optional extras so the base install
 
 | Extra | What it adds | Install command |
 |-------|-------------|-----------------|
-| `semantic` | Semantic search via ChromaDB, sentence-transformers, OpenAI/Gemini/Voyage embeddings | `pip install "zotero-mcp-server[semantic] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.5"` |
-| `pdf` | PDF outline extraction (PyMuPDF) and EPUB annotation support | `pip install "zotero-mcp-server[pdf] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.5"` |
-| `scite` | [Scite](https://scite.ai) citation intelligence — tallies and retraction alerts (no account needed) | `pip install "zotero-mcp-server[scite] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.5"` |
-| `all` | Everything above | `pip install "zotero-mcp-server[all] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.5"` |
+| `semantic` | Semantic search via ChromaDB, sentence-transformers, OpenAI/Gemini/Voyage embeddings | `pip install "zotero-mcp-server[semantic] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6"` |
+| `pdf` | PDF outline extraction (PyMuPDF) and EPUB annotation support | `pip install "zotero-mcp-server[pdf] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6"` |
+| `pdf-llm` | Optional PyMuPDF4LLM Markdown extraction backend for LLM-readable PDF text (AGPL/commercial PyMuPDF licensing applies) | `pip install "zotero-mcp-server[pdf-llm] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6"` |
+| `scite` | [Scite](https://scite.ai) citation intelligence — tallies and retraction alerts (no account needed) | `pip install "zotero-mcp-server[scite] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6"` |
+| `all` | Everything above | `pip install "zotero-mcp-server[all] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6"` |
 
 For example, with uv:
 ```bash
-uv tool install "zotero-mcp-server[all] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.5"
+uv tool install "zotero-mcp-server[all] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6"
 ```
 
 If you only need basic library access (search, read, annotate, write), the default install with no extras is all you need.
@@ -239,6 +277,23 @@ zotero-mcp update-db --force-rebuild
 # Check database status
 zotero-mcp db-status
 ```
+
+Optional PDF extraction backend config lives in `~/.config/zotero-mcp/config.json`:
+
+```json
+{
+  "semantic_search": {
+    "extraction": {
+      "pdf_backend": "pymupdf4llm",
+      "pdf_max_pages": 10,
+      "pdf_timeout": 30,
+      "pdf_use_ocr": false
+    }
+  }
+}
+```
+
+`pdf_backend` defaults to `pdfminer`. `pymupdf4llm` produces more LLM-readable Markdown when `zotero-mcp-server[pdf-llm]` is installed, and falls back to `pdfminer` if unavailable or extraction fails. OCR is disabled by default because large scanned PDFs can exceed MCP client timeouts; set `pdf_use_ocr` to `true` only when you need OCR.
 
 **Example Semantic Queries in your AI assistant:**
 - *"Find research similar to machine learning concepts in neuroscience"*
@@ -342,7 +397,8 @@ zotero-mcp setup --no-local --api-key YOUR_API_KEY --library-id YOUR_LIBRARY_ID
 ### Environment Variables
 
 **Zotero Connection:**
-- `ZOTERO_LOCAL=true`: Use the local Zotero API (default: false)
+- `ZOTERO_LOCAL=true`: Use the local Zotero API. When no mode is configured, `zotero-mcp` tries local Zotero first for reads and falls back to the web API only if web credentials are available.
+- `ZOTERO_PREFER_LOCAL=false`: Disable the automatic local-first default when no mode is configured.
 - `ZOTERO_API_KEY`: Your Zotero API key (for web API)
 - `ZOTERO_LIBRARY_ID`: Your Zotero library ID (for web API)
 - `ZOTERO_LIBRARY_TYPE`: The type of library (user or group, default: user)

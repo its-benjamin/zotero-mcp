@@ -1,4 +1,6 @@
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from zotero_mcp.local_db import LocalZoteroReader, ZoteroItem
 
@@ -12,6 +14,8 @@ class FakeLocalZoteroReader(LocalZoteroReader):
         self._connection = None
         self.pdf_max_pages = 10
         self.pdf_timeout = 30
+        self.pdf_backend = "pdfminer"
+        self.pdf_use_ocr = False
         self._fake_text = fake_text
         self._fake_pdf_path = fake_pdf_path
 
@@ -68,6 +72,55 @@ def test_get_searchable_text_truncates_at_limit():
     assert "z" * 50000 in text
     assert "z" * 50001 not in text
     assert "..." in text
+
+def test_pymupdf4llm_backend_uses_optional_markdown_extractor(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_to_markdown(path, **kwargs):
+        calls.append((path, kwargs))
+        return "# Heading\n\nBody text"
+
+    monkeypatch.setitem(sys.modules, "pymupdf4llm", SimpleNamespace(to_markdown=fake_to_markdown))
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    reader = FakeLocalZoteroReader()
+    reader.pdf_backend = "pymupdf4llm"
+
+    result = reader._extract_text_from_pdf(pdf)
+
+    assert result == "# Heading\n\nBody text"
+    assert len(calls) == 1
+    assert calls[0][0] == str(pdf)
+    assert calls[0][1]["pages"] == list(range(10))
+    assert calls[0][1]["use_ocr"] is False
+
+def test_pymupdf4llm_backend_falls_back_to_pdfminer(monkeypatch, tmp_path):
+    calls = []
+
+    def fake_to_markdown(path, **kwargs):
+        calls.append(("pymupdf4llm", path, kwargs))
+        return ""
+
+    def fake_run(args, **kwargs):
+        calls.append(("pdfminer", args, kwargs))
+        return SimpleNamespace(returncode=0, stdout="pdfminer text", stderr="")
+
+    import subprocess
+
+    monkeypatch.setitem(sys.modules, "pymupdf4llm", SimpleNamespace(to_markdown=fake_to_markdown))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4")
+    reader = FakeLocalZoteroReader()
+    reader.pdf_backend = "pymupdf4llm"
+
+    result = reader._extract_text_from_pdf(pdf)
+
+    assert result == "pdfminer text"
+    assert len(calls) == 2
+    assert calls[0][0] == "pymupdf4llm"
+    assert calls[1][0] == "pdfminer"
+    assert "pdfminer.high_level" in calls[1][1][2]
 
 
 class TestResolveAttachmentPath:

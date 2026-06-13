@@ -21,3 +21,12 @@ else:
 
             async def error(self, message: str) -> None:
                 pass
+
+            async def report_progress(self, progress: float, total: float | None = None, message: str | None = None) -> None:
+                pass
+
+            async def elicit(self, message: str, response_type=None, **kwargs):
+                raise NotImplementedError
+
+            async def send_notification(self, notification) -> None:
+                pass

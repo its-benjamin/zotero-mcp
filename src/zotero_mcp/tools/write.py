@@ -6,11 +6,11 @@ import os
 import posixpath
 import re
 import tempfile
-import time as _time
 import xml.etree.ElementTree as ET
 from typing import Any, Literal, cast
 
 import requests
+from mcp.types import ToolAnnotations
 
 from zotero_mcp import client as _client
 from zotero_mcp import utils as _utils
@@ -27,6 +27,7 @@ CROSSREF_TYPE_MAP = _helpers.CROSSREF_TYPE_MAP
 @mcp.tool(
     name="zotero_batch_update_tags",
     description="Batch update tags across multiple items matching a search query or tag filter.",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
 )
 @with_zotero_api_lock
 async def batch_update_tags(
@@ -112,7 +113,7 @@ async def batch_update_tags(
             zot.add_parameters(**params)
             return zot.items()
 
-        items = await asyncio.to_thread(_fetch_items)
+        items = await _client.run_zotero_call(_fetch_items, operation="zot.items(batch_update_tags)")
 
         if not items:
             filter_desc = []
@@ -173,10 +174,10 @@ async def batch_update_tags(
                     # the correct version number for the update
                     if write_zot is not zot:
                         try:
-                            web_item = write_zot.item(item_key)
+                            web_item = await _client.run_zotero_call(write_zot.item, item_key, operation=f"write_zot.item({item_key})")
                             web_item["data"]["tags"] = current_tags
                             await ctx.info(f"Updating item {item_key} via web API with tags: {current_tags}")
-                            result = write_zot.update_item(web_item)
+                            result = await _client.run_zotero_call(write_zot.update_item, web_item, operation=f"write_zot.update_item({item_key})")
                         except Exception as e:
                             await ctx.error(f"Failed to fetch/update item {item_key} via web API: {str(e)}")
                             skipped_count += 1
@@ -184,7 +185,7 @@ async def batch_update_tags(
                     else:
                         item["data"]["tags"] = current_tags
                         await ctx.info(f"Updating item {item_key} with tags: {current_tags}")
-                        result = write_zot.update_item(item)
+                        result = await _client.run_zotero_call(write_zot.update_item, item, operation=f"write_zot.update_item({item_key})")
 
                     if await _helpers._handle_write_response(result, ctx):
                         updated_count += 1
@@ -197,6 +198,9 @@ async def batch_update_tags(
                     skipped_count += 1
             else:
                 skipped_count += 1
+
+        if updated_count:
+            await _helpers._notify_library_changed(ctx)
 
         # Format the response
         response = ["# Batch Tag Update Results", ""]
@@ -218,12 +222,21 @@ async def batch_update_tags(
         return "\n".join(response)
 
     except Exception as e:
-        await ctx.error(f"Error in batch tag update: {str(e)}")
-        return f"Error in batch tag update: {str(e)}"
+        error_msg = str(e)
+        suggestion = ""
+        if "timeout" in error_msg.lower():
+            suggestion = " Try reducing the number of items or using a more specific query."
+        elif "connection" in error_msg.lower():
+            suggestion = " Check if Zotero is running and web API credentials are configured."
+        elif "permission" in error_msg.lower() or "read-only" in error_msg.lower():
+            suggestion = " You may need write access. Check ZOTERO_API_KEY and ZOTERO_LIBRARY_ID."
+        await ctx.error(f"Error in batch tag update: {error_msg}")
+        return f"Error in batch tag update: {error_msg}{suggestion}"
 
 
 @mcp.tool(
     name="zotero_create_collection",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
     description=(
         "Create a new collection (project/folder) in your Zotero library. "
         "To create a subcollection, pass parent_collection (not parent_key) as either "
@@ -256,27 +269,45 @@ async def create_collection(name: str, parent_collection: str | None = None, *, 
         else:
             coll_data["parentCollection"] = False  # type: ignore[assignment]
 
-        result = write_zot.create_collections([coll_data])
+        result = await _client.run_zotero_call(write_zot.create_collections, [coll_data], operation="write_zot.create_collections")
 
         if isinstance(result, dict) and result.get("success"):
             coll_key = next(iter(result["success"].values()))
             parent_info = f" under parent '{parent_collection}'" if parent_collection else ""
+            await _helpers._notify_library_changed(ctx)
             return f'Successfully created collection "{name}"{parent_info}\n\nCollection key: `{coll_key}`'
         return f"Failed to create collection: {result}"
 
     except Exception as e:
-        await ctx.error(f"Error creating collection: {e}")
-        return f"Error creating collection: {e}"
+        error_msg = str(e)
+        suggestion = ""
+        if "permission" in error_msg.lower() or "read-only" in error_msg.lower():
+            suggestion = " You may need write access. Check ZOTERO_API_KEY and ZOTERO_LIBRARY_ID."
+        elif "connection" in error_msg.lower():
+            suggestion = " Check if Zotero is running and web API credentials are configured."
+        await ctx.error(f"Error creating collection: {error_msg}")
+        return f"Error creating collection: {error_msg}{suggestion}"
 
 
-@mcp.tool(name="zotero_search_collections", description="Search for collections by name to find their keys.")
+@mcp.tool(
+    name="zotero_search_collections",
+    description="Search for collections by name to find their keys.",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+)
 @with_zotero_api_lock
 async def search_collections(query: str, *, ctx: Context) -> str:
     try:
-        zot = await asyncio.to_thread(_client.get_zotero_client)
+        zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
         await ctx.info(f"Searching collections for '{query}'")
 
-        collections = _helpers._paginate(zot.collections)
+        # Use cache if available
+        from zotero_mcp.cache import get_collections_cache
+
+        cache = get_collections_cache()
+        collections = cache.get("all_collections")
+        if collections is None:
+            collections = _helpers._paginate(zot.collections)
+            cache.set("all_collections", collections or [])
         if not collections:
             return "No collections found in your Zotero library."
 
@@ -295,7 +326,7 @@ async def search_collections(query: str, *, ctx: Context) -> str:
             lines.append(f"**Key:** `{key}`")
             if parent_key:
                 try:
-                    parent = await asyncio.to_thread(zot.collection, parent_key)
+                    parent = await _client.run_zotero_call(zot.collection, parent_key, operation=f"zot.collection({parent_key})")
                     lines.append(f"**Parent:** {parent['data'].get('name', parent_key)}")
                 except Exception:
                     lines.append(f"**Parent key:** {parent_key}")
@@ -310,6 +341,7 @@ async def search_collections(query: str, *, ctx: Context) -> str:
 
 @mcp.tool(
     name="zotero_manage_collections",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False),
     description=(
         "Add or remove one or more items from collections. "
         'item_keys must be an ARRAY of item keys, e.g. ["KEY1", "KEY2"] — not a single string. '
@@ -345,15 +377,15 @@ async def manage_collections(
         # Cache item fetches to avoid repeated API calls for the same key
         item_cache = {}
 
-        def _get_item(key):
+        async def _get_item(key):
             if key not in item_cache:
-                item_cache[key] = write_zot.item(key)
+                item_cache[key] = await _client.run_zotero_call(write_zot.item, key, operation=f"write_zot.item({key})")
             return item_cache[key]
 
         for coll_key in add_colls:
             for item_key in keys:
-                item_dict = _get_item(item_key)
-                resp = write_zot.addto_collection(coll_key, item_dict)
+                item_dict = await _get_item(item_key)
+                resp = await _client.run_zotero_call(write_zot.addto_collection, coll_key, item_dict, operation=f"write_zot.addto_collection({coll_key})")
                 if await _helpers._handle_write_response(resp, ctx):
                     results.append(f"Added {item_key} to {coll_key}")
                     # Invalidate cache — version changed after addto_collection
@@ -363,8 +395,8 @@ async def manage_collections(
 
         for coll_key in remove_colls:
             for item_key in keys:
-                item_dict = _get_item(item_key)
-                resp = write_zot.deletefrom_collection(coll_key, item_dict)
+                item_dict = await _get_item(item_key)
+                resp = await _client.run_zotero_call(write_zot.deletefrom_collection, coll_key, item_dict, operation=f"write_zot.deletefrom_collection({coll_key})")
                 if await _helpers._handle_write_response(resp, ctx):
                     results.append(f"Removed {item_key} from {coll_key}")
                     item_cache.pop(item_key, None)
@@ -382,6 +414,7 @@ async def manage_collections(
 
 @mcp.tool(
     name="zotero_add_by_doi",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
     description=(
         "Add an item to the active Zotero library by DOI, resolving rich "
         "metadata (title, creators, journal, year, abstract) from "
@@ -450,7 +483,7 @@ async def add_by_doi(
         zot_type = CROSSREF_TYPE_MAP.get(cr_type, "document")
 
         # Get valid fields from item template
-        template = write_zot.item_template(zot_type)
+        template = await _client.run_zotero_call(write_zot.item_template, zot_type, operation=f"write_zot.item_template({zot_type})")
         item_data = dict(template)
 
         # Map fields
@@ -535,7 +568,7 @@ async def add_by_doi(
             item_data["collections"] = coll_keys
 
         # Create item
-        result = write_zot.create_items([item_data])
+        result = await _client.run_zotero_call(write_zot.create_items, [item_data], operation="write_zot.create_items(doi)")
 
         if isinstance(result, dict) and result.get("success"):
             item_key = next(iter(result["success"].values()))
@@ -568,6 +601,7 @@ async def add_by_doi(
 
 @mcp.tool(
     name="zotero_add_by_url",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
     description=(
         "Add an item to the active Zotero library from a URL. Routes by "
         "URL shape: doi.org/... → CrossRef metadata (same path as "
@@ -625,7 +659,7 @@ async def add_by_url(
 
         # Generic webpage
         await ctx.info(f"Creating webpage item for: {url}")
-        template = write_zot.item_template("webpage")
+        template = await _client.run_zotero_call(write_zot.item_template, "webpage", operation="write_zot.item_template(webpage)")
         template["url"] = url
         template["title"] = url
         template["accessDate"] = ""
@@ -637,7 +671,7 @@ async def add_by_url(
         if coll_keys:
             template["collections"] = coll_keys
 
-        result = write_zot.create_items([template])
+        result = await _client.run_zotero_call(write_zot.create_items, [template], operation="write_zot.create_items(webpage)")
         if isinstance(result, dict) and result.get("success"):
             item_key = next(iter(result["success"].values()))
             return (
@@ -667,7 +701,7 @@ async def _add_by_arxiv(arxiv_id, collections, tags, write_zot, ctx):
         if resp.status_code == 429:
             wait = 5 * (2**attempt)  # 5s, 10s, 20s
             await ctx.info(f"arXiv API rate limit hit — waiting {wait}s before retry {attempt + 1}/3...")
-            _time.sleep(wait)
+            await asyncio.sleep(wait)
             continue
         break
 
@@ -709,7 +743,7 @@ async def _add_by_arxiv(arxiv_id, collections, tags, write_zot, ctx):
             else:
                 authors.append({"creatorType": "author", "name": name})
 
-    template = write_zot.item_template("preprint")
+    template = await _client.run_zotero_call(write_zot.item_template, "preprint", operation="write_zot.item_template(preprint)")
     template["title"] = title
     if authors:
         template["creators"] = authors
@@ -728,7 +762,7 @@ async def _add_by_arxiv(arxiv_id, collections, tags, write_zot, ctx):
     if coll_keys:
         template["collections"] = coll_keys
 
-    result = write_zot.create_items([template])
+    result = await _client.run_zotero_call(write_zot.create_items, [template], operation="write_zot.create_items(arxiv)")
     if isinstance(result, dict) and result.get("success"):
         item_key = next(iter(result["success"].values()))
 
@@ -744,9 +778,11 @@ async def _add_by_arxiv(arxiv_id, collections, tags, write_zot, ctx):
                 with open(filepath, "wb") as f:
                     for chunk in pdf_resp.iter_content(chunk_size=8192):
                         f.write(chunk)
-                write_zot.attachment_both(
+                await _client.run_zotero_call(
+                    write_zot.attachment_both,
                     [(filename, filepath)],
                     parentid=item_key,
+                    operation=f"write_zot.attachment_both({item_key})",
                 )
             pdf_status = "PDF attached"
         except Exception as e:
@@ -776,7 +812,8 @@ async def _lookup_isbn_openlibrary(isbn, ctx):
     """
     try:
         url = f"https://openlibrary.org/api/books?bibkeys=ISBN:{isbn}&format=json&jscmd=data"
-        resp = requests.get(
+        resp = await asyncio.to_thread(
+            requests.get,
             url,
             headers={"User-Agent": "zotero-mcp/1.0 (https://github.com/its-benjamin/zotero-mcp)"},
             timeout=15,
@@ -842,7 +879,8 @@ async def _lookup_isbn_google_books(isbn, ctx):
     normalized fields, or None on miss / error."""
     try:
         url = f"https://www.googleapis.com/books/v1/volumes?q=isbn:{isbn}"
-        resp = requests.get(
+        resp = await asyncio.to_thread(
+            requests.get,
             url,
             headers={"User-Agent": "zotero-mcp/1.0 (https://github.com/its-benjamin/zotero-mcp)"},
             timeout=15,
@@ -896,6 +934,7 @@ async def _lookup_isbn_google_books(isbn, ctx):
 
 @mcp.tool(
     name="zotero_add_by_isbn",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
     description=(
         "Add a book to your Zotero library by ISBN. Resolves metadata via "
         "Open Library (primary) and Google Books (fallback). Accepts ISBN-10, "
@@ -925,7 +964,7 @@ async def add_by_isbn(
             return f"ISBN not found on Open Library or Google Books: {normalized}"
 
         # Build Zotero book item
-        template = write_zot.item_template("book")
+        template = await _client.run_zotero_call(write_zot.item_template, "book", operation="write_zot.item_template(book)")
         item_data = dict(template)
         if meta.get("title"):
             item_data["title"] = meta["title"]
@@ -951,7 +990,7 @@ async def add_by_isbn(
         if coll_keys:
             item_data["collections"] = coll_keys
 
-        result = write_zot.create_items([item_data])
+        result = await _client.run_zotero_call(write_zot.create_items, [item_data], operation="write_zot.create_items(isbn)")
         if isinstance(result, dict) and result.get("success"):
             item_key = next(iter(result["success"].values()))
             return (
@@ -999,6 +1038,7 @@ _UPDATE_ITEM_API_TO_PARAM = {
 
 @mcp.tool(
     name="zotero_update_item",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
     description=(
         "Update metadata on an existing Zotero item by key. Only fields "
         "you pass are modified; unspecified fields are left alone. "
@@ -1073,7 +1113,7 @@ async def update_item(
         await ctx.info(f"Updating item {item_key}")
 
         # Fetch current item from write client for correct version
-        item = write_zot.item(item_key)
+        item = await _client.run_zotero_call(write_zot.item, item_key, operation=f"write_zot.item({item_key})")
         data = item.get("data", {})
         changes = []
 
@@ -1088,7 +1128,7 @@ async def update_item(
             old_item_type = data.get("itemType", "")
             if old_item_type != item_type:
                 try:
-                    new_template = write_zot.item_template(item_type)
+                    new_template = await _client.run_zotero_call(write_zot.item_template, item_type, operation=f"write_zot.item_template({item_type})")
                 except Exception as e:
                     return f"Error: invalid item_type '{item_type}': {e}"
 
@@ -1210,11 +1250,12 @@ async def update_item(
         if not changes:
             return "No changes to apply." + skip_warning
 
-        resp = write_zot.update_item(item)
+        resp = await _client.run_zotero_call(write_zot.update_item, item, operation=f"write_zot.update_item({item_key})")
         if await _helpers._handle_write_response(resp, ctx):
             from zotero_mcp.cache import get_item_cache
 
             get_item_cache().invalidate(f"item:{item_key}")
+            await _helpers._notify_library_changed(ctx)
             result = f"Successfully updated item `{item_key}`:\n\n" + "\n".join(changes)
             return result + skip_warning
         return "Failed to update item: write operation returned failure"
@@ -1228,6 +1269,7 @@ async def update_item(
 
 @mcp.tool(
     name="zotero_delete_item",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
     description=(
         "Move a Zotero item to the Trash. Works for any item type (book, "
         "journalArticle, webpage, attachment, etc.). For notes, use "
@@ -1260,7 +1302,7 @@ async def delete_item(item_key: str, allow_note: bool = False, *, ctx: Context) 
         await ctx.info(f"Trashing item {item_key}")
 
         try:
-            item = write_zot.item(item_key)
+            item = await _client.run_zotero_call(write_zot.item, item_key, operation=f"write_zot.item({item_key})")
         except Exception:
             return f"Error: No item found with key: {item_key}"
 
@@ -1291,6 +1333,7 @@ async def delete_item(item_key: str, allow_note: bool = False, *, ctx: Context) 
             from zotero_mcp.cache import get_item_cache
 
             get_item_cache().invalidate(f"item:{item_key}")
+            await _helpers._notify_library_changed(ctx)
             return f"Successfully trashed item {item_key} (type={item_type}, recoverable from Zotero's Trash)"
         return f"Failed to trash item {item_key} (HTTP {resp.status_code}): {resp.text[:200]}"
 
@@ -1301,6 +1344,7 @@ async def delete_item(item_key: str, allow_note: bool = False, *, ctx: Context) 
 
 @mcp.tool(
     name="zotero_find_duplicates",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
     description=(
         "Scan the active library (or a single collection) for duplicate "
         "items and return candidate groups for review. This tool only "
@@ -1345,9 +1389,15 @@ async def find_duplicates(
         page_size = 100
         while True:
             if collection_key:
-                batch = await asyncio.to_thread(zot.collection_items, collection_key, start=start, limit=page_size)
+                batch = await _client.run_zotero_call(
+                    zot.collection_items, collection_key, start=start, limit=page_size,
+                    operation=f"zot.collection_items({collection_key}, start={start})",
+                )
             else:
-                batch = await asyncio.to_thread(zot.items, start=start, limit=page_size)
+                batch = await _client.run_zotero_call(
+                    zot.items, start=start, limit=page_size,
+                    operation=f"zot.items(duplicates, start={start})",
+                )
             if not batch:
                 break
             items.extend(batch)
@@ -1430,6 +1480,7 @@ async def find_duplicates(
 
 @mcp.tool(
     name="zotero_merge_duplicates",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False),
     description=(
         "Merge one or more duplicate items INTO a keeper: consolidates "
         "tags, collections, notes, annotations, and all child items onto "
@@ -1475,12 +1526,12 @@ async def merge_duplicates(
             return "Error: No duplicate keys to merge (after removing keeper if present)."
 
         # Fetch all items and children
-        keeper = write_zot.item(keeper_key)
-        keeper_children = write_zot.children(keeper_key)
+        keeper = await _client.run_zotero_call(write_zot.item, keeper_key, operation=f"write_zot.item({keeper_key})")
+        keeper_children = await _client.run_zotero_call(write_zot.children, keeper_key, operation=f"write_zot.children({keeper_key})")
         duplicates = []
         for dk in dup_keys:
-            dup_item = write_zot.item(dk)
-            dup_children = write_zot.children(dk)
+            dup_item = await _client.run_zotero_call(write_zot.item, dk, operation=f"write_zot.item({dk})")
+            dup_children = await _client.run_zotero_call(write_zot.children, dk, operation=f"write_zot.children({dk})")
             duplicates.append({"item": dup_item, "children": dup_children})
 
         # Compute what will be merged
@@ -1557,17 +1608,17 @@ async def merge_duplicates(
             keeper_data = keeper.get("data", {})
             existing_tags = [t.get("tag", "") for t in keeper_data.get("tags", [])]
             keeper_data["tags"] = [{"tag": t} for t in sorted(set(existing_tags) | all_tags)]
-            resp = write_zot.update_item(keeper)
+            resp = await _client.run_zotero_call(write_zot.update_item, keeper, operation=f"write_zot.update_item({keeper_key})")
             if not await _helpers._handle_write_response(resp, ctx):
                 return "Error: Failed to merge tags into keeper."
-            keeper = write_zot.item(keeper_key)  # re-fetch for version
+            keeper = await _client.run_zotero_call(write_zot.item, keeper_key, operation=f"write_zot.item({keeper_key})")  # re-fetch for version
 
         # Step 4: Consolidate collections
         for coll_key in new_collections:
-            resp = write_zot.addto_collection(coll_key, keeper)
+            resp = await _client.run_zotero_call(write_zot.addto_collection, coll_key, keeper, operation=f"write_zot.addto_collection({coll_key})")
             if not await _helpers._handle_write_response(resp, ctx):
                 await ctx.warning(f"Failed to add keeper to collection {coll_key}")
-            keeper = write_zot.item(keeper_key)  # re-fetch for version
+            keeper = await _client.run_zotero_call(write_zot.item, keeper_key, operation=f"write_zot.item({keeper_key})")  # re-fetch for version
 
         # Step 5: Re-parent children (skip duplicate attachments)
         moved = []
@@ -1577,7 +1628,7 @@ async def merge_duplicates(
             for child in dup["children"]:
                 child_key = child.get("key", "?")
                 try:
-                    fresh_child = write_zot.item(child_key)
+                    fresh_child = await _client.run_zotero_call(write_zot.item, child_key, operation=f"write_zot.item({child_key})")
                     # Skip duplicate attachments — keeper already has this one
                     child_data = fresh_child.get("data", {})
                     if child_data.get("itemType") == "attachment":
@@ -1591,7 +1642,7 @@ async def merge_duplicates(
                             skipped_dupes.append(child_key)
                             continue  # Skip — keeper already has this attachment
                     fresh_child.get("data", {})["parentItem"] = keeper_key
-                    resp = write_zot.update_item(fresh_child)
+                    resp = await _client.run_zotero_call(write_zot.update_item, fresh_child, operation=f"write_zot.update_item({child_key})")
                     if await _helpers._handle_write_response(resp, ctx):
                         moved.append(child_key)
                     else:
@@ -1614,7 +1665,7 @@ async def merge_duplicates(
         for dup in duplicates:
             dup_key = dup["item"]["key"]
             try:
-                dup_item = write_zot.item(dup_key)
+                dup_item = await _client.run_zotero_call(write_zot.item, dup_key, operation=f"write_zot.item({dup_key})")
                 version = dup_item["version"]
                 from pyzotero.zotero import build_url
 
@@ -1637,6 +1688,7 @@ async def merge_duplicates(
                 await ctx.warning(f"Failed to trash {dup_key}: {e}")
 
         skip_info = f" ({len(skipped_dupes)} duplicate attachments skipped)" if skipped_dupes else ""
+        await _helpers._notify_library_changed(ctx)
         return (
             f"Merge complete.\n\n"
             f"- Tags merged: {len(new_tags)} new\n"
@@ -1655,6 +1707,7 @@ async def merge_duplicates(
 
 @mcp.tool(
     name="zotero_get_pdf_outline",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
     description=(
         "Extract the table of contents (outline/bookmarks) from a PDF "
         "attachment, returned as a hierarchical markdown list with each "
@@ -1676,11 +1729,11 @@ async def merge_duplicates(
 @with_zotero_api_lock
 async def get_pdf_outline(item_key: str, *, ctx: Context) -> str:
     try:
-        zot = await asyncio.to_thread(_client.get_zotero_client)
+        zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
         await ctx.info(f"Getting PDF outline for item {item_key}")
 
         # Find PDF attachment
-        children = await asyncio.to_thread(zot.children, item_key)
+        children = await _client.run_zotero_call(zot.children, item_key, operation=f"zot.children({item_key})")
         pdf_child = None
         for child in children:
             if child.get("data", {}).get("contentType") == "application/pdf":
@@ -1700,7 +1753,7 @@ async def get_pdf_outline(item_key: str, *, ctx: Context) -> str:
 
         # Download PDF (works for both local/WebDAV/web storage)
         with tempfile.TemporaryDirectory() as tmpdir:
-            await asyncio.to_thread(zot.dump, attachment_key, filename=filename, path=tmpdir)
+            await _client.run_zotero_call(zot.dump, attachment_key, filename=filename, path=tmpdir, operation=f"zot.dump({attachment_key})")
             pdf_path = os.path.join(tmpdir, filename)
             if not os.path.exists(pdf_path) or os.path.getsize(pdf_path) == 0:
                 return f"Could not download PDF for attachment `{attachment_key}`."
@@ -1725,6 +1778,7 @@ async def get_pdf_outline(item_key: str, *, ctx: Context) -> str:
 
 @mcp.tool(
     name="zotero_add_from_file",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
     description=(
         "Add an item to the active Zotero library from a LOCAL .pdf or "
         ".epub file. Attempts to extract the DOI from the file content; "
@@ -1780,7 +1834,7 @@ async def add_from_file(
             return f"Error: File not found: {file_path}"
 
         ext = os.path.splitext(file_path)[1].lower()
-        allowed_exts = {".pdf", ".epub", ".djvu", ".doc", ".docx", ".odt", ".rtf"}
+        allowed_exts = {".pdf", ".epub", ".djvu", ".doc", ".docx", ".odt", ".rtf", ".html", ".htm"}
         if ext not in allowed_exts:
             return f"Error: Unsupported file type '{ext}'. Allowed: {', '.join(sorted(allowed_exts))}"
 
@@ -1830,7 +1884,7 @@ async def add_from_file(
                 return f"DOI lookup succeeded but couldn't extract item key.\n\n{result_msg}"
         else:
             # Create a basic item
-            template = write_zot.item_template(item_type)
+            template = await _client.run_zotero_call(write_zot.item_template, item_type, operation=f"write_zot.item_template({item_type})")
             template["title"] = title or os.path.basename(file_path)
 
             tag_list = _helpers._normalize_str_list_input(tags, "tags")
@@ -1840,7 +1894,7 @@ async def add_from_file(
             if coll_keys:
                 template["collections"] = coll_keys
 
-            result = write_zot.create_items([template])
+            result = await _client.run_zotero_call(write_zot.create_items, [template], operation="write_zot.create_items(from_file)")
             if isinstance(result, dict) and result.get("success"):
                 parent_key = next(iter(result["success"].values()))
             else:
@@ -1849,9 +1903,11 @@ async def add_from_file(
         # Attach the file
         try:
             display_name = os.path.basename(file_path)
-            write_zot.attachment_both(
+            await _client.run_zotero_call(
+                write_zot.attachment_both,
                 [(display_name, file_path)],
                 parentid=parent_key,
+                operation=f"write_zot.attachment_both({parent_key})",
             )
             attach_info = f"File attached: {display_name}"
         except Exception as e:
@@ -1872,6 +1928,7 @@ async def add_from_file(
 
 @mcp.tool(
     name="zotero_move_item",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
     description=(
         "Move an item from one collection to another. "
         "Removes the item from the source collection and adds it to the target. "
@@ -1909,7 +1966,7 @@ async def move_item(
 
         await ctx.info(f"Moving item {item_key} to collection {target_collection}")
 
-        item = await asyncio.to_thread(read_zot.item, item_key)
+        item = await _client.run_zotero_call(read_zot.item, item_key, operation=f"zot.item({item_key})")
         if not item:
             return f"Error: No item found with key: {item_key}"
 
@@ -1926,7 +1983,7 @@ async def move_item(
         data["collections"] = list(collections)
         item["data"] = data
 
-        response = await asyncio.to_thread(write_zot.update_item, item)
+        response = await _client.run_zotero_call(write_zot.update_item, item, operation=f"zot.update_item({item_key})")
         if not await _helpers._handle_write_response(response, ctx):
             return f"Error: Failed to move item {item_key}"
 
@@ -1935,6 +1992,7 @@ async def move_item(
         get_item_cache().invalidate(f"item:{item_key}")
 
         src_msg = f" from {source_collection}" if source_collection else ""
+        await _helpers._notify_library_changed(ctx)
         return f"Moved item {item_key}{src_msg} to collection {target_collection}"
 
     except Exception as e:
@@ -1944,6 +2002,7 @@ async def move_item(
 
 @mcp.tool(
     name="zotero_rename_tag",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False),
     description=(
         "Rename a tag across all items that have it. "
         "Finds all items with old_tag, removes it, and adds new_tag. "
@@ -1983,7 +2042,10 @@ async def rename_tag(
         await ctx.info(f"Renaming tag '{old_tag}' to '{new_tag}'")
 
         limit = _helpers._normalize_limit(limit, default=100, max_val=500)
-        items = await asyncio.to_thread(lambda: _helpers._paginate(read_zot.items, tag=old_tag, max_items=limit))
+        items = await _client.run_zotero_call(
+            _helpers._paginate, read_zot.items, tag=old_tag, max_items=limit,
+            operation=f"paginate(zot.items, tag={old_tag})",
+        )
 
         if not items:
             return f"No items found with tag '{old_tag}'"
@@ -2005,7 +2067,7 @@ async def rename_tag(
             item["data"] = data
 
             try:
-                response = await asyncio.to_thread(write_zot.update_item, item)
+                response = await _client.run_zotero_call(write_zot.update_item, item, operation=f"zot.update_item({item.get('key', '')})")
                 if await _helpers._handle_write_response(response, ctx):
                     updated += 1
                     from zotero_mcp.cache import get_item_cache
@@ -2016,6 +2078,7 @@ async def rename_tag(
             except Exception as e:
                 errors.append(f"{item['key']}: {e}")
 
+        await _helpers._notify_library_changed(ctx)
         result = f"Renamed tag '{old_tag}' to '{new_tag}' on {updated} item(s)"
         if errors:
             result += f"\nFailed on {len(errors)} item(s): {errors[:5]}"
@@ -2026,3 +2089,671 @@ async def rename_tag(
     except Exception as e:
         await ctx.error(f"Error renaming tag: {e}")
         return f"Error renaming tag: {e}"
+
+
+@mcp.tool(
+    name="zotero_relate_items",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    description=(
+        "Create a bidirectional 'Related' link between two Zotero items. "
+        "After linking, each item appears in the other's Related Items section. "
+        "item_key: the 8-character key of the first item. "
+        "related_key: the 8-character key of the second item to relate to. "
+        "Scope: active library only (web API required for writes). "
+        "Example: zotero_relate_items(item_key='ABC12345', related_key='DEF67890')."
+    ),
+)
+@with_zotero_api_lock
+async def relate_items(item_key: str, related_key: str, *, ctx: Context) -> str:
+    """Create a bidirectional Related link between two items."""
+    try:
+        for k in [item_key, related_key]:
+            err = _helpers.validate_item_key(k)
+            if err:
+                return f"Error: Invalid key '{k}': {err}"
+
+        if item_key == related_key:
+            return "Error: Cannot relate an item to itself."
+
+        await ctx.info(f"Relating {item_key} ↔ {related_key}")
+        zot = await _client.run_zotero_call(_client.get_web_zotero_client, operation="get_web_zotero_client")
+        if not zot:
+            return "Error: Web API client required for relating items. Set ZOTERO_API_KEY and ZOTERO_LIBRARY_ID."
+
+        # Get both items
+        item1 = await _client.run_zotero_call(zot.item, item_key, operation=f"zot.item({item_key})")
+        item2 = await _client.run_zotero_call(zot.item, related_key, operation=f"zot.item({related_key})")
+        if not item1:
+            return f"Item not found: {item_key}"
+        if not item2:
+            return f"Item not found: {related_key}"
+
+        # Add relations bidirectionally
+        lib_type = zot.library_type if hasattr(zot, 'library_type') else "users"
+        lib_id = zot.library_id if hasattr(zot, 'library_id') else "0"
+        # pyzotero uses plural "users"/"groups" but Zotero URIs use singular
+        uri_lib_type = lib_type.rstrip("s") if lib_type.endswith("s") else lib_type
+        uri1 = f"http://zotero.org/{uri_lib_type}/{lib_id}/items/{item_key}"
+        uri2 = f"http://zotero.org/{uri_lib_type}/{lib_id}/items/{related_key}"
+
+        relations1 = item1.get("data", {}).get("relations", {}).get("dc:relation", [])
+        relations2 = item2.get("data", {}).get("relations", {}).get("dc:relation", [])
+        if isinstance(relations1, str):
+            relations1 = [relations1]
+        if isinstance(relations2, str):
+            relations2 = [relations2]
+
+        # Check if already related
+        if uri2 in relations1:
+            return f"Items {item_key} and {related_key} are already related."
+
+        # Update item1: add relation to item2
+        if "relations" not in item1["data"]:
+            item1["data"]["relations"] = {}
+        item1["data"]["relations"]["dc:relation"] = relations1 + [uri2]
+
+        # Update item2: add relation to item1
+        if "relations" not in item2["data"]:
+            item2["data"]["relations"] = {}
+        item2["data"]["relations"]["dc:relation"] = relations2 + [uri1]
+
+        # Save both items
+        errors = []
+        for item, other_key in [(item1, related_key), (item2, item_key)]:
+            try:
+                resp = await _client.run_zotero_call(zot.update_item, item, operation=f"zot.update_item({item['key']})")
+                if not await _helpers._handle_write_response(resp):
+                    errors.append(f"Failed to update {item['key']}: {resp}")
+            except Exception as e:
+                errors.append(f"Error updating {item['key']}: {e}")
+
+        if errors:
+            return f"Partial success: {'; '.join(errors)}"
+
+        title1 = item1["data"].get("title", item_key)[:50]
+        title2 = item2["data"].get("title", related_key)[:50]
+        await _helpers._notify_library_changed(ctx)
+        return f"Related: '{title1}' ↔ '{title2}'"
+
+    except Exception as e:
+        await ctx.error(f"Error relating items: {str(e)}")
+        return f"Error relating items: {str(e)}"
+
+
+@mcp.tool(
+    name="zotero_unrelate_items",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    description=(
+        "Remove the 'Related' link between two Zotero items. "
+        "item_key: the 8-character key of the first item. "
+        "related_key: the 8-character key of the item to unlink. "
+        "Scope: active library only (web API required for writes)."
+    ),
+)
+@with_zotero_api_lock
+async def unrelate_items(item_key: str, related_key: str, *, ctx: Context) -> str:
+    """Remove a Related link between two items."""
+    try:
+        for k in [item_key, related_key]:
+            err = _helpers.validate_item_key(k)
+            if err:
+                return f"Error: Invalid key '{k}': {err}"
+
+        await ctx.info(f"Unrelating {item_key} ↔ {related_key}")
+        zot = await _client.run_zotero_call(_client.get_web_zotero_client, operation="get_web_zotero_client")
+        if not zot:
+            return "Error: Web API client required. Set ZOTERO_API_KEY and ZOTERO_LIBRARY_ID."
+
+        item1 = await _client.run_zotero_call(zot.item, item_key, operation=f"zot.item({item_key})")
+        item2 = await _client.run_zotero_call(zot.item, related_key, operation=f"zot.item({related_key})")
+        if not item1:
+            return f"Item not found: {item_key}"
+        if not item2:
+            return f"Item not found: {related_key}"
+
+        lib_type = zot.library_type if hasattr(zot, 'library_type') else "users"
+        lib_id = zot.library_id if hasattr(zot, 'library_id') else "0"
+        uri_lib_type = lib_type.rstrip("s") if lib_type.endswith("s") else lib_type
+        uri1 = f"http://zotero.org/{uri_lib_type}/{lib_id}/items/{item_key}"
+        uri2 = f"http://zotero.org/{uri_lib_type}/{lib_id}/items/{related_key}"
+
+        relations1 = item1.get("data", {}).get("relations", {}).get("dc:relation", [])
+        relations2 = item2.get("data", {}).get("relations", {}).get("dc:relation", [])
+        if isinstance(relations1, str):
+            relations1 = [relations1]
+        if isinstance(relations2, str):
+            relations2 = [relations2]
+
+        if uri2 not in relations1:
+            return f"Items {item_key} and {related_key} are not related."
+
+        # Remove relations bidirectionally
+        item1["data"]["relations"]["dc:relation"] = [r for r in relations1 if r != uri2]
+        item2["data"]["relations"]["dc:relation"] = [r for r in relations2 if r != uri1]
+
+        errors = []
+        for item in [item1, item2]:
+            try:
+                resp = await _client.run_zotero_call(zot.update_item, item, operation=f"zot.update_item({item['key']})")
+                if not await _helpers._handle_write_response(resp):
+                    errors.append(f"Failed to update {item['key']}: {resp}")
+            except Exception as e:
+                errors.append(f"Error updating {item['key']}: {e}")
+
+        if errors:
+            return f"Partial success: {'; '.join(errors)}"
+
+        await _helpers._notify_library_changed(ctx)
+        return f"Unrelated: {item_key} ↔ {related_key}"
+
+    except Exception as e:
+        await ctx.error(f"Error unrelating items: {str(e)}")
+        return f"Error unrelating items: {str(e)}"
+
+
+@mcp.tool(
+    name="zotero_batch_delete_items",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    description=(
+        "Move multiple Zotero items to the Trash in a single batch operation. "
+        "item_keys: comma-separated list of 8-character Zotero item keys (max 50). "
+        "Items are recoverable from Zotero's Trash. "
+        "Example: zotero_batch_delete_items(item_keys='ABC12345,DEF67890')."
+    ),
+)
+@with_zotero_api_lock
+async def batch_delete_items(item_keys: str, *, ctx: Context) -> str:
+    """Batch delete (trash) multiple items."""
+    try:
+        keys = [k.strip() for k in item_keys.replace(";", ",").split(",") if k.strip()]
+        if not keys:
+            return "Error: No item keys provided."
+        if len(keys) > 50:
+            return f"Error: Too many keys ({len(keys)}). Max 50 per batch."
+
+        for k in keys:
+            err = _helpers.validate_item_key(k)
+            if err:
+                return f"Error: Invalid key '{k}': {err}"
+
+        _, write_zot = _helpers._get_write_client(ctx)
+    except ValueError as e:
+        return str(e)
+
+    try:
+        await ctx.info(f"Batch trashing {len(keys)} items")
+        from pyzotero.zotero import build_url
+
+        # Get current versions for all items
+        items = await _client.run_zotero_call(write_zot.item, ",".join(keys), operation=f"write_zot.item(batch:{len(keys)})")
+        if not items:
+            return f"No items found for keys: {','.join(keys)}"
+
+        # Build batch PATCH payload
+        successes = []
+        errors = []
+        for item in items:
+            key = item.get("key", "")
+            try:
+                url = build_url(
+                    write_zot.endpoint,
+                    f"/{write_zot.library_type}/{write_zot.library_id}/items/{key}",
+                )
+                resp = cast(Any, write_zot.client).patch(
+                    url=url,
+                    headers={"If-Unmodified-Since-Version": str(item["version"])},
+                    content=json.dumps({"deleted": 1}),
+                )
+                if resp.status_code in (200, 204):
+                    successes.append(key)
+                else:
+                    errors.append(f"{key}: HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"{key}: {e}")
+
+        # Invalidate caches
+        from zotero_mcp.cache import get_item_cache
+
+        cache = get_item_cache()
+        for key in successes:
+            cache.invalidate(f"item:{key}")
+
+        if successes:
+            await _helpers._notify_library_changed(ctx)
+
+        result = f"Trashed {len(successes)} item(s)"
+        if errors:
+            result += f", failed {len(errors)}: {'; '.join(errors[:5])}"
+        return result
+
+    except Exception as e:
+        await ctx.error(f"Error batch trashing items: {str(e)}")
+        return f"Error batch trashing items: {str(e)}"
+
+
+@mcp.tool(
+    name="zotero_create_saved_search",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
+    description=(
+        "Create a new saved search in Zotero. "
+        "name: the name for the saved search. "
+        "conditions: a list of search conditions, each with 'condition', 'operator', and 'value'. "
+        "Common conditions: 'title', 'author', 'date', 'tag', 'publicationTitle', 'DOI', 'abstractNote', 'anyField'. "
+        "Common operators: 'contains', 'is', 'doesNotContain', 'isNot', 'beginsWith', 'isInTheLast'. "
+        "join_mode: 'all' (AND) or 'any' (OR) — default 'all'. "
+        "Example: zotero_create_saved_search(name='ML Papers', conditions=[{'condition': 'title', 'operator': 'contains', 'value': 'machine learning'}])."
+    ),
+)
+@with_zotero_api_lock
+async def create_saved_search(
+    name: str,
+    conditions: list[dict[str, str]],
+    join_mode: str = "all",
+    *,
+    ctx: Context,
+) -> str:
+    """Create a saved search in Zotero."""
+    try:
+        if not name.strip():
+            return "Error: Search name cannot be empty."
+        if not conditions:
+            return "Error: At least one condition is required."
+
+        _, write_zot = _helpers._get_write_client(ctx)
+    except ValueError as e:
+        return str(e)
+
+    try:
+        await ctx.info(f"Creating saved search: {name}")
+
+        # Build the search object
+        search_data = {
+            "name": name.strip(),
+            "conditions": [],
+        }
+
+        for cond in conditions:
+            if not isinstance(cond, dict):
+                return f"Error: Each condition must be a dict with 'condition', 'operator', 'value'. Got: {cond}"
+            condition = cond.get("condition", "")
+            operator = cond.get("operator", "contains")
+            value = cond.get("value", "")
+            if not condition:
+                return f"Error: Condition missing 'condition' field: {cond}"
+            search_data["conditions"].append({
+                "condition": condition,
+                "operator": operator,
+                "value": value,
+                "required": join_mode,
+            })
+
+        # Create via API
+        try:
+            resp = await _client.run_zotero_call(write_zot.create_saved_search, search_data, operation="write_zot.create_saved_search")
+            if resp and isinstance(resp, dict) and "success" in resp:
+                key = resp["success"].get("0", "")
+                if key:
+                    await _helpers._notify_library_changed(ctx)
+                    return f"Created saved search '{name}' (key: {key})"
+            return f"Failed to create saved search: {resp}"
+        except Exception as primary_err:
+            await ctx.info(f"Primary create_saved_search failed, trying fallback: {primary_err}")
+            # Fallback: try direct API call
+            import requests as _requests
+
+            lib_type = write_zot.library_type if hasattr(write_zot, 'library_type') else "users"
+            lib_id = write_zot.library_id if hasattr(write_zot, 'library_id') else "0"
+            if _utils.is_local_mode():
+                base_url = f"http://localhost:23119/api/{lib_type}/{lib_id}"
+            else:
+                base_url = f"https://api.zotero.org/{lib_type}/{lib_id}"
+
+            url = f"{base_url}/searches"
+            headers = {"Content-Type": "application/json", "Zotero-API-Version": "3"}
+            if not _utils.is_local_mode():
+                from zotero_mcp.config import load_config
+
+                cfg = load_config()
+                api_key = cfg.get("client_env", {}).get("ZOTERO_API_KEY", "")
+                if api_key:
+                    headers["Zotero-API-Key"] = api_key
+
+            resp = _requests.post(url, json=[search_data], headers=headers, timeout=30)
+            if resp.status_code == 200:
+                result = resp.json()
+                if "success" in result and "0" in result["success"]:
+                    key = result["success"]["0"]
+                    await _helpers._notify_library_changed(ctx)
+                    return f"Created saved search '{name}' (key: {key})"
+                return f"Failed to create saved search: {result}"
+            return f"Failed to create saved search (HTTP {resp.status_code}): {resp.text[:200]}"
+
+    except Exception as e:
+        await ctx.error(f"Error creating saved search: {str(e)}")
+        return f"Error creating saved search: {str(e)}"
+
+
+@mcp.tool(
+    name="zotero_batch_add_by_doi",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
+    description=(
+        "Add multiple papers to Zotero by DOI in sequence. "
+        "dois: comma-separated list of DOIs (max 10). "
+        "Each DOI is processed via zotero_add_by_doi with full metadata + OA PDF download. "
+        "Returns a summary of successes and failures. "
+        "Example: zotero_batch_add_by_doi(dois='10.1234/abc,10.5678/def')."
+    ),
+)
+@with_zotero_api_lock
+async def batch_add_by_doi(
+    dois: str,
+    tags: list[str] | str | None = None,
+    collection_key: str | None = None,
+    *,
+    ctx: Context,
+) -> str:
+    """Add multiple papers by DOI."""
+    try:
+        doi_list = [d.strip() for d in dois.replace(";", ",").split(",") if d.strip()]
+        if not doi_list:
+            return "Error: No DOIs provided."
+        if len(doi_list) > 10:
+            return f"Error: Too many DOIs ({len(doi_list)}). Max 10 per batch."
+
+        tags = _helpers._normalize_str_list_input(tags, "tags") if tags is not None else []
+    except Exception as e:
+        return f"Error parsing input: {e}"
+
+    results = []
+    for doi in doi_list:
+        try:
+            # Call the existing add_by_doi function
+            result = await add_by_doi(
+                doi=doi,
+                tags=tags,
+                collections=collection_key,
+                ctx=ctx,
+            )
+            results.append(f"**{doi}**: {result[:100]}")
+        except Exception as e:
+            results.append(f"**{doi}**: Error — {e}")
+
+    successes = sum(1 for r in results if "Successfully" in r or "Added" in r)
+    return f"# Batch Add Results ({successes}/{len(doi_list)} succeeded)\n\n" + "\n\n".join(results)
+
+
+@mcp.tool(
+    name="zotero_rename_collection",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    description=(
+        "Rename an existing Zotero collection. "
+        "collection_key: the 8-character collection key. "
+        "new_name: the new name for the collection. "
+        "Scope: active library only (web API required for writes). "
+        "Example: zotero_rename_collection(collection_key='ABC12345', new_name='Machine Learning Papers')."
+    ),
+)
+@with_zotero_api_lock
+async def rename_collection(collection_key: str, new_name: str, *, ctx: Context) -> str:
+    """Rename a Zotero collection."""
+    try:
+        key_err = _helpers.validate_item_key(collection_key)
+        if key_err:
+            return f"Error: {key_err}"
+        if not new_name.strip():
+            return "Error: Collection name cannot be empty."
+
+        _, write_zot = _helpers._get_write_client(ctx)
+    except ValueError as e:
+        return str(e)
+
+    try:
+        await ctx.info(f"Renaming collection {collection_key} to '{new_name}'")
+
+        # Get the collection
+        try:
+            collection = await _client.run_zotero_call(write_zot.collection, collection_key, operation=f"write_zot.collection({collection_key})")
+        except Exception:
+            return f"Error: Collection not found: {collection_key}"
+
+        # Update the name
+        collection["data"]["name"] = new_name.strip()
+        resp = await _client.run_zotero_call(write_zot.update_collection, collection, operation=f"write_zot.update_collection({collection_key})")
+        if await _helpers._handle_write_response(resp, ctx):
+            await _helpers._notify_library_changed(ctx)
+            return f"Renamed collection to '{new_name.strip()}' (key: {collection_key})"
+        return f"Failed to rename collection: {resp}"
+
+    except Exception as e:
+        await ctx.error(f"Error renaming collection: {str(e)}")
+        return f"Error renaming collection: {str(e)}"
+
+
+@mcp.tool(
+    name="zotero_delete_collection",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    description=(
+        "Delete a Zotero collection. Items in the collection are NOT deleted — "
+        "they remain in the library. Only the collection itself is removed. "
+        "collection_key: the 8-character collection key. "
+        "Scope: active library only (web API required for writes). "
+        "Example: zotero_delete_collection(collection_key='ABC12345')."
+    ),
+)
+@with_zotero_api_lock
+async def delete_collection(collection_key: str, *, ctx: Context) -> str:
+    """Delete a Zotero collection (items are preserved)."""
+    try:
+        key_err = _helpers.validate_item_key(collection_key)
+        if key_err:
+            return f"Error: {key_err}"
+
+        _, write_zot = _helpers._get_write_client(ctx)
+    except ValueError as e:
+        return str(e)
+
+    try:
+        await ctx.info(f"Deleting collection {collection_key}")
+
+        # Get the collection to check version
+        try:
+            collection = await _client.run_zotero_call(write_zot.collection, collection_key, operation=f"write_zot.collection({collection_key})")
+            name = collection["data"].get("name", "Unnamed")
+        except Exception:
+            return f"Error: Collection not found: {collection_key}"
+
+        # Delete the collection
+        try:
+            resp = await _client.run_zotero_call(write_zot.delete_collection, collection, operation=f"write_zot.delete_collection({collection_key})")
+            if resp and hasattr(resp, 'status_code') and resp.status_code in (200, 204):
+                await _helpers._notify_library_changed(ctx)
+                return f"Deleted collection '{name}' (key: {collection_key}). Items were preserved."
+            return f"Failed to delete collection: {resp}"
+        except Exception as e:
+            return f"Error deleting collection: {e}"
+
+    except Exception as e:
+        await ctx.error(f"Error deleting collection: {str(e)}")
+        return f"Error deleting collection: {str(e)}"
+
+
+@mcp.tool(
+    name="zotero_merge_tags",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    description=(
+        "Merge multiple tags into a single canonical tag. All items with any of "
+        "the source tags will have those tags replaced with the target tag. "
+        "source_tags: comma-separated list of tags to merge from. "
+        "target_tag: the canonical tag to merge into. "
+        "Example: zotero_merge_tags(source_tags='ML,machine-learning,machine learning', target_tag='machine learning')."
+    ),
+)
+@with_zotero_api_lock
+async def merge_tags(source_tags: str, target_tag: str, *, ctx: Context) -> str:
+    """Merge multiple tags into one canonical tag."""
+    try:
+        tags = [t.strip() for t in source_tags.replace(";", ",").split(",") if t.strip()]
+        if not tags:
+            return "Error: No source tags provided."
+        if not target_tag.strip():
+            return "Error: Target tag cannot be empty."
+        target = target_tag.strip()
+
+        _, write_zot = _helpers._get_write_client(ctx)
+    except ValueError as e:
+        return str(e)
+
+    try:
+        await ctx.info(f"Merging tags {tags} into '{target}'")
+        total_renamed = 0
+        errors = []
+
+        for tag in tags:
+            if tag == target:
+                continue
+            try:
+                # Use the existing rename_tag functionality
+                result = await rename_tag(old_tag=tag, new_tag=target, ctx=ctx)
+                if "Renamed" in result or "renamed" in result:
+                    # Extract count from result
+                    import re as _re
+                    match = _re.search(r"(\d+)", result)
+                    if match:
+                        total_renamed += int(match.group(1))
+                elif "No items" in result:
+                    pass  # Tag doesn't exist, skip
+                else:
+                    errors.append(f"'{tag}': {result[:80]}")
+            except Exception as e:
+                errors.append(f"'{tag}': {e}")
+
+        result = f"Merged {len(tags)} tags into '{target}' — updated {total_renamed} item(s)"
+        if errors:
+            result += f"\nErrors: {'; '.join(errors[:5])}"
+        return result
+
+    except Exception as e:
+        await ctx.error(f"Error merging tags: {str(e)}")
+        return f"Error merging tags: {str(e)}"
+
+
+@mcp.tool(
+    name="zotero_delete_saved_search",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    description=(
+        "Delete a saved search from Zotero. "
+        "search_name: the exact name of the saved search to delete (case-insensitive). "
+        "Scope: active library only (web API required for writes). "
+        "Example: zotero_delete_saved_search(search_name='My Old Search')."
+    ),
+)
+@with_zotero_api_lock
+async def delete_saved_search(search_name: str, *, ctx: Context) -> str:
+    """Delete a saved search by name."""
+    from zotero_mcp.local_db import get_local_zotero_reader
+
+    reader = get_local_zotero_reader()
+    if not reader:
+        return "Saved searches are only available in local mode (ZOTERO_LOCAL=true)."
+    try:
+        searches = reader.get_saved_searches()
+        match = None
+        for s in searches:
+            if s["name"].lower() == search_name.lower():
+                match = s
+                break
+        if not match:
+            names = [s["name"] for s in searches]
+            return (
+                f"No saved search named '{search_name}'. "
+                f"Available: {', '.join(names) if names else 'none'}"
+            )
+
+        # Try to delete via API
+        try:
+            _, write_zot = _helpers._get_write_client(ctx)
+            from pyzotero.zotero import build_url
+
+            search_key = match["key"]
+            url = build_url(
+                write_zot.endpoint,
+                f"/{write_zot.library_type}/{write_zot.library_id}/searches/{search_key}",
+            )
+            resp = write_zot.client.delete(url=url)
+            if resp.status_code in (200, 204):
+                await _helpers._notify_library_changed(ctx)
+                return f"Deleted saved search '{match['name']}' (key: {search_key})"
+            return f"Failed to delete saved search (HTTP {resp.status_code}): {resp.text[:200]}"
+        except ValueError:
+            return "Error: Web API client required for deleting saved searches. Set ZOTERO_API_KEY and ZOTERO_LIBRARY_ID."
+
+    except Exception as e:
+        await ctx.error(f"Error deleting saved search: {str(e)}")
+        return f"Error deleting saved search: {str(e)}"
+    finally:
+        reader.close()
+
+
+@mcp.tool(
+    name="zotero_delete_tags",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+    description=(
+        "Delete tags from the Zotero library. Removes the tag from all items "
+        "that use it, then deletes the tag itself. "
+        "tags: comma-separated list of tags to delete. "
+        "Scope: active library only (web API required). "
+        "Example: zotero_delete_tags(tags='old-tag,unused-tag')."
+    ),
+)
+@with_zotero_api_lock
+async def delete_tags(tags: str, *, ctx: Context) -> str:
+    """Delete tags from the Zotero library."""
+    try:
+        tag_list = [t.strip() for t in tags.replace(";", ",").split(",") if t.strip()]
+        if not tag_list:
+            return "Error: No tags provided."
+
+        _, write_zot = _helpers._get_write_client(ctx)
+    except ValueError as e:
+        return str(e)
+
+    try:
+        await ctx.info(f"Deleting {len(tag_list)} tag(s)")
+        from pyzotero.zotero import build_url
+
+        deleted = []
+        errors = []
+
+        for tag in tag_list:
+            try:
+                # URL-encode the tag name
+                import urllib.parse
+
+                encoded_tag = urllib.parse.quote(tag, safe="")
+                url = build_url(
+                    write_zot.endpoint,
+                    f"/{write_zot.library_type}/{write_zot.library_id}/tags/{encoded_tag}",
+                )
+                resp = write_zot.client.delete(url=url)
+                if resp.status_code in (200, 204):
+                    deleted.append(tag)
+                elif resp.status_code == 404:
+                    errors.append(f"'{tag}': not found")
+                else:
+                    errors.append(f"'{tag}': HTTP {resp.status_code}")
+            except Exception as e:
+                errors.append(f"'{tag}': {e}")
+
+        if deleted:
+            await _helpers._notify_library_changed(ctx)
+
+        result = f"Deleted {len(deleted)} tag(s)"
+        if deleted:
+            result += f": {', '.join(deleted)}"
+        if errors:
+            result += f"\nErrors: {'; '.join(errors[:5])}"
+        return result
+
+    except Exception as e:
+        await ctx.error(f"Error deleting tags: {str(e)}")
+        return f"Error deleting tags: {str(e)}"

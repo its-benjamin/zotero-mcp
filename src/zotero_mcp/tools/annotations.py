@@ -1,6 +1,5 @@
 """Annotation and note tool functions for the Zotero MCP server."""
 
-import asyncio
 import json
 import os
 import tempfile
@@ -8,11 +7,13 @@ import uuid
 from typing import Any
 
 import requests
+from mcp.types import ToolAnnotations
 
 from zotero_mcp import client as _client
 from zotero_mcp import utils as _utils
 from zotero_mcp._app import mcp
 from zotero_mcp._context import Context
+from zotero_mcp.cache import get_annotations_cache
 from zotero_mcp.client import with_zotero_api_lock
 from zotero_mcp.rate_limiter import rate_limit
 from zotero_mcp.tools import _helpers
@@ -40,7 +41,12 @@ def _get_note_write_client(op_description: str) -> tuple[Any, str | None]:
         override = _client.get_active_library()
         if override:
             zot.library_id = override.get("library_id", zot.library_id)
-            zot.library_type = override.get("library_type", zot.library_type)
+            # pyzotero stores library_type with trailing "s" (e.g. "users", "groups")
+            # but the override stores the raw value (e.g. "user", "group"),
+            # so we must append "s" to match pyzotero's internal convention.
+            raw_type = override.get("library_type")
+            if raw_type:
+                zot.library_type = raw_type if raw_type.endswith("s") else raw_type + "s"
     else:
         zot = _client.get_zotero_client()
     return zot, None
@@ -48,6 +54,7 @@ def _get_note_write_client(op_description: str) -> tuple[Any, str | None]:
 
 @mcp.tool(
     name="zotero_get_annotations",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
     description="Get all annotations for a specific item or across your entire Zotero library. When called without item_key, returns ALL annotations library-wide — this can be very large. Always pass item_key when you know which item you want.",
 )
 @with_zotero_api_lock
@@ -70,6 +77,12 @@ async def get_annotations(
         # Initialize Zotero client
         zot = _client.get_zotero_client()
 
+        # Validate item key if provided
+        if item_key:
+            key_err = _helpers.validate_item_key(item_key)
+            if key_err:
+                return f"Error: {key_err}"
+
         # Prepare annotations list
         annotations = []
         parent_title = "Untitled Item"
@@ -78,7 +91,7 @@ async def get_annotations(
         if item_key:
             # First, verify the item exists and get its details
             try:
-                parent = await asyncio.to_thread(zot.item, item_key)
+                parent = await _client.run_zotero_call(zot.item, item_key, operation=f"zot.item({item_key})")
                 parent_title = parent["data"].get("title", "Untitled Item")
                 await ctx.info(f"Fetching annotations for item: {parent_title}")
             except Exception:
@@ -245,7 +258,7 @@ async def get_annotations(
                     # Ensure PDF annotation tool is installed
                     if ensure_pdfannots_installed():
                         # Get PDF attachments via the resolved parent key
-                        children = await asyncio.to_thread(zot.children, parent_item_key)
+                        children = await _client.run_zotero_call(zot.children, parent_item_key, operation=f"zot.children({parent_item_key})")
                         pdf_attachments = [
                             item for item in children if item.get("data", {}).get("contentType") == "application/pdf"
                         ]
@@ -303,8 +316,17 @@ async def get_annotations(
         else:
             # Retrieve all annotations in the library
             limit = _helpers._normalize_limit(limit, default=100)
-            # Use _paginate helper instead of inline manual pagination
-            annotations = _helpers._paginate(zot.items, max_items=limit, itemType="annotation")
+
+            # Check cache first
+            cache_key = f"annotations:all:{limit}"
+            annotations_cache = get_annotations_cache()
+            annotations = annotations_cache.get(cache_key)
+
+            if annotations is None:
+                # Use _paginate helper instead of inline manual pagination
+                annotations = _helpers._paginate(zot.items, max_items=limit, itemType="annotation")
+                # Cache the result
+                annotations_cache.set(cache_key, annotations)
 
         # Handle no annotations found
         if not annotations:
@@ -421,6 +443,7 @@ _get_annotations = get_annotations
 
 @mcp.tool(
     name="zotero_get_notes",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
     description="Retrieve notes from your Zotero library, with options to filter by parent item. Set raw_html=True to return the note's original HTML (e.g., for round-tripping through zotero_update_note).",
 )
 @with_zotero_api_lock
@@ -448,6 +471,13 @@ async def get_notes(
     """
     try:
         await ctx.info(f"Fetching notes{f' for item {item_key}' if item_key else ''}")
+
+        # Validate item key if provided
+        if item_key:
+            key_err = _helpers.validate_item_key(item_key)
+            if key_err:
+                return f"Error: {key_err}"
+
         zot = _client.get_zotero_client()
 
         # Prepare search parameters
@@ -532,7 +562,7 @@ async def _batch_resolve_parent_titles(zot, parent_keys: set[str], ctx: Context)
     for i in range(0, len(keys_list), BATCH_SIZE):
         batch = keys_list[i : i + BATCH_SIZE]
         try:
-            items = await asyncio.to_thread(zot.items, itemKey=",".join(batch))
+            items = await _client.run_zotero_call(zot.items, itemKey=",".join(batch), operation=f"zot.items(batch:{len(batch)})")
             for item in items:
                 titles[item.get("key", "")] = item.get("data", {}).get("title", "Untitled")
         except Exception as e:
@@ -544,7 +574,7 @@ async def _batch_resolve_parent_titles(zot, parent_keys: set[str], ctx: Context)
     missing = [k for k in parent_keys if k not in titles]
     for key in missing:
         try:
-            item = await asyncio.to_thread(zot.item, key)
+            item = await _client.run_zotero_call(zot.item, key, operation=f"zot.item({key})")
             if item:
                 titles[key] = item.get("data", {}).get("title", "Untitled")
         except Exception:
@@ -571,7 +601,7 @@ async def _batch_resolve_grandparent_titles(zot, parent_keys: set[str], ctx: Con
     for i in range(0, len(keys_list), BATCH_SIZE):
         batch = keys_list[i : i + BATCH_SIZE]
         try:
-            items = await asyncio.to_thread(zot.items, itemKey=",".join(batch))
+            items = await _client.run_zotero_call(zot.items, itemKey=",".join(batch), operation=f"zot.items(attachment batch:{len(batch)})")
             for item in items:
                 key = item.get("key", "")
                 attachment_data[key] = item
@@ -585,7 +615,7 @@ async def _batch_resolve_grandparent_titles(zot, parent_keys: set[str], ctx: Con
     missing_attachments = [k for k in parent_keys if k not in attachment_data]
     for key in missing_attachments:
         try:
-            item = await asyncio.to_thread(zot.item, key)
+            item = await _client.run_zotero_call(zot.item, key, operation=f"zot.item({key})")
             if item:
                 attachment_data[key] = item
                 gp_key = item.get("data", {}).get("parentItem")
@@ -600,7 +630,7 @@ async def _batch_resolve_grandparent_titles(zot, parent_keys: set[str], ctx: Con
     for i in range(0, len(gp_list), BATCH_SIZE):
         batch = gp_list[i : i + BATCH_SIZE]
         try:
-            items = await asyncio.to_thread(zot.items, itemKey=",".join(batch))
+            items = await _client.run_zotero_call(zot.items, itemKey=",".join(batch), operation=f"zot.items(gp batch:{len(batch)})")
             for item in items:
                 grandparent_titles[item.get("key", "")] = item.get("data", {}).get("title", "Untitled")
         except Exception as e:
@@ -610,7 +640,7 @@ async def _batch_resolve_grandparent_titles(zot, parent_keys: set[str], ctx: Con
     missing_gp = [k for k in grandparent_keys if k not in grandparent_titles]
     for key in missing_gp:
         try:
-            item = await asyncio.to_thread(zot.item, key)
+            item = await _client.run_zotero_call(zot.item, key, operation=f"zot.item({key})")
             if item:
                 grandparent_titles[key] = item.get("data", {}).get("title", "Untitled")
         except Exception:
@@ -693,6 +723,7 @@ def _format_search_results(
 
 @mcp.tool(
     name="zotero_search_notes",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
     description="Search for notes and annotations across your Zotero library. Set raw_html=True to return note matches as raw HTML (useful for round-tripping through zotero_update_note).",
 )
 @with_zotero_api_lock
@@ -746,12 +777,12 @@ async def search_notes(query: str, limit: int | str | None = 20, raw_html: bool 
             await ctx.warning(f"Local search unavailable, falling back to API: {e}")
 
     # ---------- API mode: separate try/except blocks ----------
-    zot = await asyncio.to_thread(_client.get_zotero_client)
+    zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
 
     # Notes — always try (this works since upstream PR #136)
     try:
         zot.add_parameters(q=query, qmode="everything", itemType="note", limit=limit)
-        notes = await asyncio.to_thread(zot.items)
+        notes = await _client.run_zotero_call(zot.items, operation="zot.items(search_notes)")
 
         # Batch-resolve parent titles
         parent_keys = {n.get("data", {}).get("parentItem") for n in notes if n.get("data", {}).get("parentItem")}
@@ -826,6 +857,7 @@ async def search_notes(query: str, limit: int | str | None = 20, raw_html: bool 
 
 @mcp.tool(
     name="zotero_create_note",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
     description=(
         "Create a new note attached to a Zotero item. "
         "Parameters: item_key (the key of the parent item to attach the note to), "
@@ -851,13 +883,16 @@ async def create_note(
     """
     try:
         await ctx.info(f"Creating note for item {item_key}")
+        key_err = _helpers.validate_item_key(item_key)
+        if key_err:
+            return f"Error: {key_err}"
         # Normalize tags (LLMs often pass JSON strings instead of lists)
         tags = _helpers._normalize_str_list_input(tags, "tags") if tags is not None else []
         zot = _client.get_zotero_client()
 
         # First verify the parent item exists
         try:
-            parent = await asyncio.to_thread(zot.item, item_key)
+            parent = await _client.run_zotero_call(zot.item, item_key, operation=f"zot.item({item_key})")
             parent_title = parent["data"].get("title", "Untitled Item")
         except Exception:
             return f"Error: No item found with key: {item_key}"
@@ -901,8 +936,10 @@ async def create_note(
                 override = _client.get_active_library()
                 if override:
                     web_zot.library_id = override.get("library_id", web_zot.library_id)
-                    web_zot.library_type = override.get("library_type", web_zot.library_type)
-                result = web_zot.create_items([note_data])
+                    raw_type = override.get("library_type")
+                    if raw_type:
+                        web_zot.library_type = raw_type if raw_type.endswith("s") else raw_type + "s"
+                result = await _client.run_zotero_call(web_zot.create_items, [note_data], operation="web_zot.create_items(note)")
                 if "success" in result and result["success"]:
                     successful = result["success"]
                     if len(successful) > 0:
@@ -944,7 +981,7 @@ async def create_note(
                     return f"Failed to create note via local connector (HTTP {resp.status_code}): {resp.text}"
         else:
             # Remote API: use pyzotero's create_items
-            result = await asyncio.to_thread(zot.create_items, [note_data])
+            result = await _client.run_zotero_call(zot.create_items, [note_data], operation="zot.create_items(note)")
 
             # Check if creation was successful
             if "success" in result and result["success"]:
@@ -964,6 +1001,7 @@ async def create_note(
 
 @mcp.tool(
     name="zotero_update_note",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
     description="Update the HTML content of an existing Zotero note. Set append=True to concatenate to the existing note; otherwise the note is replaced.",
 )
 async def update_note(item_key: str, note_text: str, append: bool = False, *, ctx: Context) -> str:
@@ -982,13 +1020,16 @@ async def update_note(item_key: str, note_text: str, append: bool = False, *, ct
     """
     try:
         await ctx.info(f"Updating note {item_key} (append={append})")
+        key_err = _helpers.validate_item_key(item_key)
+        if key_err:
+            return f"Error: {key_err}"
 
         zot, err = _get_note_write_client("updating notes")
         if err:
             return err
 
         try:
-            item = await asyncio.to_thread(zot.item, item_key)
+            item = await _client.run_zotero_call(zot.item, item_key, operation=f"zot.item({item_key})")
         except Exception:
             return f"Error: No item found with key: {item_key}"
 
@@ -1001,7 +1042,7 @@ async def update_note(item_key: str, note_text: str, append: bool = False, *, ct
         else:
             data["note"] = note_text
 
-        resp = await asyncio.to_thread(zot.update_item, item)
+        resp = await _client.run_zotero_call(zot.update_item, item, operation=f"zot.update_item({item_key})")
         if await _helpers._handle_write_response(resp, ctx):
             return f"Successfully updated note {item_key}"
         return f"Failed to update note {item_key}"
@@ -1013,6 +1054,7 @@ async def update_note(item_key: str, note_text: str, append: bool = False, *, ct
 
 @mcp.tool(
     name="zotero_delete_note",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
     description="Move a Zotero note to the Trash. Trashed notes are recoverable from Zotero's Trash — empty the Trash in the Zotero UI for permanent deletion.",
 )
 async def delete_note(item_key: str, *, ctx: Context) -> str:
@@ -1028,13 +1070,16 @@ async def delete_note(item_key: str, *, ctx: Context) -> str:
     """
     try:
         await ctx.info(f"Trashing note {item_key}")
+        key_err = _helpers.validate_item_key(item_key)
+        if key_err:
+            return f"Error: {key_err}"
 
         zot, err = _get_note_write_client("deleting notes")
         if err:
             return err
 
         try:
-            item = await asyncio.to_thread(zot.item, item_key)
+            item = await _client.run_zotero_call(zot.item, item_key, operation=f"zot.item({item_key})")
         except Exception:
             return f"Error: No item found with key: {item_key}"
 
@@ -1068,6 +1113,7 @@ async def delete_note(item_key: str, *, ctx: Context) -> str:
 
 @mcp.tool(
     name="zotero_create_annotation",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
     description=(
         "Create a highlight annotation on a PDF or EPUB attachment with optional comment. "
         "Parameters: attachment_key (the key of the PDF/EPUB attachment, not the parent item), "
@@ -1120,7 +1166,9 @@ async def create_annotation(
             override = _client.get_active_library()
             if override:
                 web_client.library_id = override.get("library_id", web_client.library_id)
-                web_client.library_type = override.get("library_type", web_client.library_type)
+                raw_type = override.get("library_type")
+                if raw_type:
+                    web_client.library_type = raw_type if raw_type.endswith("s") else raw_type + "s"
 
         # REQUIREMENT: Web API is required for creating annotations
         # Zotero's local API (port 23119) is read-only
@@ -1359,6 +1407,7 @@ async def create_annotation(
 
 @mcp.tool(
     name="zotero_create_area_annotation",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
     description="Create a PDF area/image annotation using normalized page coordinates.",
 )
 async def create_area_annotation(
@@ -1427,7 +1476,9 @@ async def create_area_annotation(
             override = _client.get_active_library()
             if override:
                 web_client.library_id = override.get("library_id", web_client.library_id)
-                web_client.library_type = override.get("library_type", web_client.library_type)
+                raw_type = override.get("library_type")
+                if raw_type:
+                    web_client.library_type = raw_type if raw_type.endswith("s") else raw_type + "s"
 
         if not web_client:
             return (

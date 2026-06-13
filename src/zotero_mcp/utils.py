@@ -20,7 +20,7 @@ def suppress_stdout():
             sys.stdout = old_stdout
 
 
-def format_creators(creators: list[dict[str, str] | str]) -> str:
+def format_creators(creators: list[dict[str, str] | str], max_authors: int | None = None, label_types: bool = False) -> str:
     """
     Format creator names into a string.
 
@@ -28,6 +28,10 @@ def format_creators(creators: list[dict[str, str] | str]) -> str:
         creators: List of creator objects from Zotero.  Each element is
             typically a dict with firstName/lastName or name keys, but may
             also be a plain string (e.g. from BetterBibTeX results).
+        max_authors: If set, truncate to at most this many authors and append
+            "et al." when there are more.
+        label_types: If True, prefix non-author creators with their type
+            (e.g., "ed. Smith, John").
 
     Returns:
         Formatted string with creator names.
@@ -37,10 +41,36 @@ def format_creators(creators: list[dict[str, str] | str]) -> str:
         if isinstance(creator, str):
             names.append(creator)
         elif "firstName" in creator and "lastName" in creator:
-            names.append(f"{creator['lastName']}, {creator['firstName']}")
+            name = f"{creator['lastName']}, {creator['firstName']}"
+            if label_types:
+                ctype = creator.get("creatorType", "author")
+                if ctype == "editor":
+                    name = f"ed. {name}"
+                elif ctype == "translator":
+                    name = f"trans. {name}"
+                elif ctype != "author":
+                    name = f"({ctype}) {name}"
+            names.append(name)
         elif "name" in creator:
-            names.append(creator["name"])
+            name = creator["name"]
+            if label_types:
+                ctype = creator.get("creatorType", "author")
+                if ctype == "editor":
+                    name = f"ed. {name}"
+                elif ctype == "translator":
+                    name = f"trans. {name}"
+                elif ctype != "author":
+                    name = f"({ctype}) {name}"
+            names.append(name)
+    if max_authors and len(names) > max_authors:
+        names = names[:max_authors]
+        names.append("et al.")
     return "; ".join(names) if names else "No authors listed"
+
+
+# Process-level cache for is_local_mode() — avoids repeated os.getenv + string ops
+# on every tool call. ZOTERO_LOCAL is set at process start and doesn't change.
+_is_local_mode_cache: bool | None = None
 
 
 def is_local_mode() -> bool:
@@ -48,9 +78,22 @@ def is_local_mode() -> bool:
 
     Local mode is enabled when environment variable `ZOTERO_LOCAL` is set to a
     truthy value ("true", "yes", or "1", case-insensitive).
+
+    The result is cached at process level after first call since ZOTERO_LOCAL
+    is set at startup and doesn't change during the session.
     """
+    global _is_local_mode_cache
+    if _is_local_mode_cache is not None:
+        return _is_local_mode_cache
     value = os.getenv("ZOTERO_LOCAL", "")
-    return value.lower() in {"true", "yes", "1"}
+    _is_local_mode_cache = value.lower() in {"true", "yes", "1"}
+    return _is_local_mode_cache
+
+
+def clear_local_mode_cache() -> None:
+    """Clear the is_local_mode cache (used by tests)."""
+    global _is_local_mode_cache
+    _is_local_mode_cache = None
 
 
 def format_item_result(
@@ -81,8 +124,9 @@ def format_item_result(
         heading,
         f"**Type:** {data.get('itemType', 'unknown')}",
         f"**Item Key:** {item.get('key', '')}",
+        f"**Title:** {title}",
         f"**Date:** {data.get('date', 'No date')}",
-        f"**Authors:** {format_creators(data.get('creators', []))}",
+        f"**Creators:** {format_creators(data.get('creators', []))}",
     ]
 
     # Trash status. pyzotero's default list endpoints filter trashed items
@@ -97,6 +141,11 @@ def format_item_result(
         for label, value in extra_fields.items():
             lines.append(f"**{label}:** {value}")
 
+    if doi := data.get("DOI"):
+        lines.append(f"**DOI:** {doi}")
+    if url := data.get("url"):
+        lines.append(f"**URL:** {url}")
+
     if abstract_len != 0:
         abstract = data.get("abstractNote", "")
         if abstract:
@@ -109,6 +158,12 @@ def format_item_result(
             tag_list = [f"`{t['tag']}`" for t in tags]
             if tag_list:
                 lines.append(f"**Tags:** {' '.join(tag_list)}")
+
+    if item_key := item.get("key"):
+        lines.append(
+            f'**Next:** call `zotero_get_item_metadata(item_key="{item_key}")`; '
+            f'children: `zotero_get_item_children(item_key="{item_key}")`'
+        )
 
     lines.append("")  # blank separator
     return lines

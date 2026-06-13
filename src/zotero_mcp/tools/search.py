@@ -6,15 +6,23 @@ import logging as _logging
 import re
 import threading as _threading
 import time as _time
-from pathlib import Path
 from typing import Literal
+
+from fastmcp.server.dependencies import is_docket_available
+from mcp.types import ToolAnnotations
 
 from zotero_mcp import client as _client
 from zotero_mcp import utils as _utils
 from zotero_mcp._app import mcp
 from zotero_mcp._context import Context
+from zotero_mcp.cache import TTLCache
 from zotero_mcp.client import with_zotero_api_lock
 from zotero_mcp.tools import _helpers
+
+# Search result cache: key = (query, qmode, item_type, limit, frozenset(tag))
+# value = list of items. TTL = 60s to avoid stale results.
+# Using TTLCache for O(1) eviction and thread safety.
+_search_cache = TTLCache(ttl_seconds=60.0, max_size=256)
 
 _search_logger = _logging.getLogger("zotero_mcp.search")
 
@@ -65,6 +73,8 @@ def _search_with_variants(
     tag: list[str] | None = None,
     cascade_start: float | None = None,
     cascade_timeout: float | None = None,
+    sort_by: str = "dateAdded",
+    sort_direction: str = "desc",
 ) -> list:
     """Search using multiple query variants, deduplicate by key.
 
@@ -76,6 +86,9 @@ def _search_with_variants(
 
     If cascade_start and cascade_timeout are provided, checks the budget
     before each API call and bails out if exceeded.
+
+    Early termination: stops trying variants once we have >= limit results,
+    saving API calls for queries that already found enough matches.
     """
     variants = _utils._generate_search_variants(query)
     _search_logger.debug(f"[SEARCH] query='{query}' variants={variants}")
@@ -83,6 +96,11 @@ def _search_with_variants(
     all_items: list[dict] = []
     seen_keys: set[str] = set()
     for variant in variants:
+        # Early termination: stop if we already have enough results
+        if len(all_items) >= limit:
+            _search_logger.debug(f"[SEARCH] Early termination: {len(all_items)} results >= limit {limit}")
+            break
+
         # Check cascade timeout before each API call
         if cascade_start is not None and cascade_timeout is not None:
             if _time.monotonic() - cascade_start > cascade_timeout:
@@ -94,6 +112,8 @@ def _search_with_variants(
             "qmode": qmode,
             "limit": limit,
             "itemType": item_type,
+            "sort": sort_by,
+            "direction": sort_direction,
         }
         if tag:
             params["tag"] = tag
@@ -117,7 +137,8 @@ def _search_with_variants(
 
 @mcp.tool(
     name="zotero_search_items",
-    description="Search for items in your Zotero library, given a query string. Returns metadata and abstracts. IMPORTANT: Use short, simple queries — 'Author Year' (e.g., 'Brewer 2011') or just the author name (e.g., 'Cladder-Micus'). Do NOT add extra keywords like topic words — this is substring matching, not web search. More words make the search STRICTER, not broader. If no results are found, the tool will automatically retry with simplified queries and semantic search. Optionally scope to a specific collection with collection_key.",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+    description="Search for items in your Zotero library, given a query string. Returns metadata and abstracts. IMPORTANT: Use short, simple queries — 'Author Year' (e.g., 'Brewer 2011') or just the author name (e.g., 'Cladder-Micus'). Do NOT add extra keywords like topic words — this is substring matching, not web search. More words make the search STRICTER, not broader. If no results are found, the tool will automatically retry with simplified queries and semantic search. Optionally scope to a specific collection with collection_key. sort_by: 'dateAdded' (default), 'dateModified', 'title', 'creator', 'date', 'publicationTitle'. sort_direction: 'desc' (default) or 'asc'.",
 )
 @with_zotero_api_lock
 async def search_items(
@@ -127,6 +148,8 @@ async def search_items(
     limit: int | str | None = 10,
     tag: list[str] | list[dict] | str | None = None,
     collection_key: str | None = None,
+    sort_by: str = "dateAdded",
+    sort_direction: Literal["desc", "asc"] = "desc",
     *,
     ctx: Context,
 ) -> str:
@@ -144,6 +167,8 @@ async def search_items(
             filter form with Zotero's stored-tag form. All are normalized
             internally to the list[str] form pyzotero expects.
         collection_key: Optional collection key to scope the search to a specific collection.
+        sort_by: Sort field (dateAdded, dateModified, title, creator, date, publicationTitle)
+        sort_direction: Sort direction (desc or asc)
             When provided, bypasses the fallback cascade and searches the collection directly.
         ctx: MCP context
 
@@ -162,14 +187,16 @@ async def search_items(
             tag_condition_str = f" with tags: '{', '.join(tag)}'"
 
         await ctx.info(f"Searching Zotero for '{query}'{tag_condition_str}")
-        zot = _client.get_zotero_client()
+        zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
 
         limit = _helpers._normalize_limit(limit, default=10)
 
         if collection_key:
             # Collection-scoped search — query the collection directly, no cascade needed
             try:
-                _col = await asyncio.to_thread(zot.collection, collection_key)
+                _col = await _client.run_zotero_call(
+                    zot.collection, collection_key, operation=f"zot.collection({collection_key})"
+                )
             except Exception:
                 _col = None
             if not _col or _col.get("key") != collection_key:
@@ -180,6 +207,8 @@ async def search_items(
                 q=query,
                 qmode=qmode,
                 itemType=item_type,
+                sort=sort_by,
+                direction=sort_direction,
                 max_items=limit,
                 **({"tag": tag} if tag else {}),
             )
@@ -187,16 +216,29 @@ async def search_items(
         else:
             # --- Initial search with variant generation ---
             _cascade_start = _time.monotonic()
-            items = _search_with_variants(
-                zot,
-                query,
-                qmode,
-                limit,
-                item_type=item_type,
-                tag=tag,
-                cascade_start=_cascade_start,
-                cascade_timeout=CASCADE_TIMEOUT,
-            )
+
+            # Check search cache first
+            _tag_key = frozenset(tag) if tag else frozenset()
+            _cache_key = f"{query}|{qmode}|{item_type}|{limit}|{_tag_key}"
+            _cached = _search_cache.get(_cache_key)
+            if _cached is not None:
+                items = _cached
+                _search_logger.debug(f"[SEARCH] Cache hit for '{query}': {len(items)} results")
+            else:
+                items = _search_with_variants(
+                    zot,
+                    query,
+                    qmode,
+                    limit,
+                    item_type=item_type,
+                    tag=tag,
+                    cascade_start=_cascade_start,
+                    cascade_timeout=CASCADE_TIMEOUT,
+                    sort_by=sort_by,
+                    sort_direction=sort_direction,
+                )
+                # Cache the result (TTLCache handles expiry and eviction)
+                _search_cache.set(_cache_key, items)
             _search_logger.debug(
                 f"[CASCADE] initial: {len(items)} results in {_time.monotonic() - _cascade_start:.2f}s"
             )
@@ -294,9 +336,10 @@ async def search_items(
                 # Strategy 4: Semantic search (if database exists)
                 if not await _check_cascade_timeout() and not items:
                     try:
+                        from zotero_mcp.config import get_config_path
                         from zotero_mcp.semantic_search import create_semantic_search
 
-                        config_path = Path.home() / ".config" / "zotero-mcp" / "config.json"
+                        config_path = get_config_path()
                         if config_path.exists():
                             await ctx.info(f"Retry with semantic search: '{query}'")
                             t0 = _time.monotonic()
@@ -358,12 +401,19 @@ async def search_items(
         return _helpers._prepend_size_warning("\n".join(output))
 
     except Exception as e:
-        await ctx.error(f"Error searching Zotero: {str(e)}")
-        return f"Error searching Zotero: {str(e)}"
+        error_msg = str(e)
+        suggestion = ""
+        if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+            suggestion = " Try simplifying your search query or checking if Zotero is running."
+        elif "connection" in error_msg.lower():
+            suggestion = " Check if Zotero is running and the local API is enabled (Settings → Advanced)."
+        await ctx.error(f"Error searching Zotero: {error_msg}")
+        return f"Error searching Zotero: {error_msg}{suggestion}"
 
 
 @mcp.tool(
     name="zotero_search_by_tag",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
     description="Search for items in your Zotero library by tag, optionally scoped to a collection. "
     "Conditions are ANDed, each term supports disjunction (`OR`) and exclusion (`-`).",
 )
@@ -405,14 +455,16 @@ async def search_by_tag(
             return "Error: Tag cannot be empty"
 
         await ctx.info(f"Searching Zotero for tag '{tag}'")
-        zot = _client.get_zotero_client()
+        zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
 
         limit = _helpers._normalize_limit(limit, default=10)
 
         # Search library-wide or scoped to a collection
         if collection_key:
             try:
-                _col = await asyncio.to_thread(zot.collection, collection_key)
+                _col = await _client.run_zotero_call(
+                    zot.collection, collection_key, operation=f"zot.collection({collection_key})"
+                )
             except Exception:
                 _col = None
             if not _col or _col.get("key") != collection_key:
@@ -430,7 +482,7 @@ async def search_by_tag(
                 zot.add_parameters(q="", tag=tag, itemType=item_type, limit=limit)
                 return zot.items()
 
-            results = await asyncio.to_thread(_fetch_tag_results)
+            results = await _client.run_zotero_call(_fetch_tag_results, operation="zot.items(tag search)")
 
         if not results:
             return f"No items found with tag: '{tag}'"
@@ -442,15 +494,23 @@ async def search_by_tag(
         for i, item in enumerate(results, 1):
             output.extend(_utils.format_item_result(item, index=i))
 
-        return "\n".join(output)
+        text = "\n".join(output)
+        return _helpers._prepend_size_warning(text)
 
     except Exception as e:
-        await ctx.error(f"Error searching Zotero: {str(e)}")
-        return f"Error searching Zotero: {str(e)}"
+        error_msg = str(e)
+        suggestion = ""
+        if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+            suggestion = " Try using a more specific tag or adding a collection filter."
+        elif "connection" in error_msg.lower():
+            suggestion = " Check if Zotero is running and the local API is enabled."
+        await ctx.error(f"Error searching by tag: {error_msg}")
+        return f"Error searching by tag: {error_msg}{suggestion}"
 
 
 @mcp.tool(
     name="zotero_search_by_citation_key",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
     description="Look up a Zotero item by its BetterBibTeX citation key (e.g., 'Smith2024'). "
     "Works in local mode via the BetterBibTeX API, or in web mode by searching the Extra field.",
 )
@@ -493,8 +553,12 @@ async def search_by_citation_key(citekey: str, *, ctx: Context) -> str:
                         if matched:
                             item_key = matched.get("itemKey") or matched.get("key")
                             if item_key:
-                                zot = await asyncio.to_thread(_client.get_zotero_client)
-                                item = await asyncio.to_thread(zot.item, item_key)
+                                zot = await _client.run_zotero_call(
+                                    _client.get_zotero_client, operation="get_zotero_client"
+                                )
+                                item = await _client.run_zotero_call(
+                                    zot.item, item_key, operation=f"zot.item({item_key})"
+                                )
                                 if item:
                                     return _helpers._format_citekey_result(item, citekey)
                             return _helpers._format_bbt_result(matched, citekey)
@@ -502,9 +566,9 @@ async def search_by_citation_key(citekey: str, *, ctx: Context) -> str:
                 await ctx.warning(f"BetterBibTeX lookup failed, falling back to Extra field search: {e}")
 
         # Strategy B: Search via pyzotero Extra field
-        zot = await asyncio.to_thread(_client.get_zotero_client)
+        zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
         zot.add_parameters(q=citekey, qmode="everything", itemType="-attachment", limit=25)
-        results = await asyncio.to_thread(zot.items)
+        results = await _client.run_zotero_call(zot.items, operation="zot.items(citation key search)")
 
         for item in results:
             extra = item.get("data", {}).get("extra", "")
@@ -518,7 +582,11 @@ async def search_by_citation_key(citekey: str, *, ctx: Context) -> str:
         return f"Error looking up citation key: {str(e)}"
 
 
-@mcp.tool(name="zotero_advanced_search", description="Perform an advanced search with multiple criteria.")
+@mcp.tool(
+    name="zotero_advanced_search",
+    description="Perform an advanced search with multiple criteria.",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+)
 @with_zotero_api_lock
 async def advanced_search(
     conditions: list[dict[str, str]],
@@ -562,7 +630,7 @@ async def advanced_search(
         limit = _helpers._normalize_limit(limit, default=50, max_val=500)
 
         await ctx.info(f"Performing advanced search with {len(conditions)} conditions")
-        zot = _client.get_zotero_client()
+        zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
 
         valid_operations = {
             "is",
@@ -575,6 +643,9 @@ async def advanced_search(
             "isLessThan",
             "isBefore",
             "isAfter",
+            "isTrue",
+            "isFalse",
+            "isInTheLast",
         }
 
         parsed_conditions: list[dict[str, str]] = []
@@ -597,6 +668,43 @@ async def advanced_search(
                 return f"Error: Condition {i} has an empty field"
 
             parsed_conditions.append({"field": field, "operation": operation, "value": value})
+
+        # Optimization: identify conditions that can be pushed server-side
+        # to reduce the number of items fetched from the API.
+        server_params: dict = {}
+        client_conditions: list[dict[str, str]] = []
+
+        for cond in parsed_conditions:
+            field_lower = cond["field"].lower()
+            operation = cond["operation"]
+            value = cond["value"]
+
+            # Title/creator contains → use q parameter (only one can be used)
+            if field_lower in {"title", "creator", "author"} and operation == "contains" and "q" not in server_params:
+                server_params["q"] = value
+                server_params["qmode"] = "titleCreatorYear"
+            # Tag exact match → use tag parameter
+            elif field_lower in {"tag", "tags"} and operation == "is" and "tag" not in server_params:
+                server_params["tag"] = value
+            # Year range → use since/until parameters
+            elif field_lower == "year" and operation in {"is", "isAfter", "isBefore"}:
+                try:
+                    year = int(value)
+                    if operation == "is":
+                        server_params["since"] = year
+                        server_params["until"] = year
+                    elif operation == "isAfter":
+                        server_params["since"] = year + 1
+                    elif operation == "isBefore":
+                        server_params["until"] = year - 1
+                except ValueError:
+                    client_conditions.append(cond)
+            else:
+                client_conditions.append(cond)
+
+        _search_logger.debug(
+            f"[ADVANCED] server_params={server_params}, client_conditions={len(client_conditions)}"
+        )
 
         def _extract_values(data: dict[str, object], field: str) -> list[str]:
             field_lower = field.lower()
@@ -696,24 +804,38 @@ async def advanced_search(
                 return all(comparisons)
             return any(comparisons)
 
-        # Execute advanced search by iterating items and filtering client-side.
+        # Execute advanced search.
+        # Optimization: push itemType filter and simple conditions server-side
+        # to reduce the number of items fetched from the API.
         results = []
         batch_size = 100
         start = 0
         while True:
-            batch = await asyncio.to_thread(zot.items, start=start, limit=batch_size)
+            batch = await _client.run_zotero_call(
+                zot.items,
+                start=start,
+                limit=batch_size,
+                itemType="-attachment -note -annotation",
+                **server_params,
+                operation=f"zot.items(advanced batch start={start})",
+            )
             if not batch:
                 break
 
-            for item in batch:
-                data = item.get("data", {})
-                if data.get("itemType") in {"attachment", "note", "annotation"}:
-                    continue
-
-                checks = [_matches_condition(data, c) for c in parsed_conditions]
-                matched = all(checks) if join_mode == "all" else any(checks)
-                if matched:
-                    results.append(item)
+            # Only apply client-side conditions if any remain
+            if client_conditions:
+                for item in batch:
+                    data = item.get("data", {})
+                    checks = [_matches_condition(data, c) for c in client_conditions]
+                    matched = all(checks) if join_mode == "all" else any(checks)
+                    if matched:
+                        results.append(item)
+                # Early termination: stop fetching once we have enough results
+                if len(results) >= limit:
+                    break
+            else:
+                # All conditions were pushed server-side
+                results.extend(batch)
 
             if len(batch) < batch_size:
                 break
@@ -752,12 +874,21 @@ async def advanced_search(
         return "\n".join(output)
 
     except Exception as e:
-        await ctx.error(f"Error in advanced search: {str(e)}")
-        return f"Error in advanced search: {str(e)}"
+        error_msg = str(e)
+        suggestion = ""
+        if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
+            suggestion = " Try simplifying your search or reducing the number of conditions."
+        elif "connection" in error_msg.lower():
+            suggestion = " Check if Zotero is running."
+        elif "invalid" in error_msg.lower() or "condition" in error_msg.lower():
+            suggestion = " Check that condition fields and operators are valid. Use zotero_get_item_fields to see valid fields."
+        await ctx.error(f"Error in advanced search: {error_msg}")
+        return f"Error in advanced search: {error_msg}{suggestion}"
 
 
 @mcp.tool(
     name="zotero_semantic_search",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
     description="Prioritized search tool. Perform semantic search over your Zotero library using AI-powered embeddings. BEST TOOL for finding papers on a specific topic — much more efficient than scanning collection items or reading abstracts. Works across your entire library.",
 )
 @with_zotero_api_lock
@@ -816,7 +947,9 @@ async def semantic_search(
             )
 
         # Determine config path
-        config_path = Path.home() / ".config" / "zotero-mcp" / "config.json"
+        from zotero_mcp.config import get_config_path
+
+        config_path = get_config_path()
 
         # Create semantic search instance
         search = create_semantic_search(str(config_path))
@@ -865,18 +998,30 @@ async def semantic_search(
         return "\n".join(output)
 
     except Exception as e:
-        await ctx.error(f"Error in semantic search: {str(e)}")
-        return f"Error in semantic search: {str(e)}"
+        error_msg = str(e)
+        suggestion = ""
+        if "not installed" in error_msg.lower() or "no module" in error_msg.lower():
+            suggestion = " Install semantic search with: pip install 'zotero-mcp-server[semantic]'"
+        elif "not configured" in error_msg.lower() or "config" in error_msg.lower():
+            suggestion = " Run 'zotero-mcp setup' to configure semantic search."
+        elif "timeout" in error_msg.lower():
+            suggestion = " The search may be processing. Try a simpler query or check if ChromaDB is running."
+        elif "connection" in error_msg.lower():
+            suggestion = " Check if Zotero is running."
+        await ctx.error(f"Error in semantic search: {error_msg}")
+        return f"Error in semantic search: {error_msg}{suggestion}"
 
 
 @mcp.tool(
     name="zotero_update_search_database",
+    annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False),
     description=(
         "Update the semantic search database with latest Zotero items. "
         "Run this after adding items (via add_by_doi, add_by_url, or add_from_file) "
         "to make them immediately available for semantic search. Also useful if the "
         "user has added items directly in Zotero since the last update."
     ),
+    task=True if is_docket_available() else None,
 )
 @with_zotero_api_lock
 async def update_search_database(force_rebuild: bool = False, limit: int | None = None, *, ctx: Context) -> str:
@@ -905,14 +1050,25 @@ async def update_search_database(force_rebuild: bool = False, limit: int | None 
             )
 
         # Determine config path
-        config_path = Path.home() / ".config" / "zotero-mcp" / "config.json"
+        from zotero_mcp.config import get_config_path
+
+        config_path = get_config_path()
 
         # Create semantic search instance
         search = create_semantic_search(str(config_path))
 
         # Use fulltext extraction when in local mode (has access to PDFs)
-        stats = search.update_database(
-            force_full_rebuild=force_rebuild, limit=limit, extract_fulltext=_utils.is_local_mode()
+        loop = asyncio.get_running_loop()
+
+        def _progress(done: int, total: int, message: str) -> None:
+            asyncio.run_coroutine_threadsafe(ctx.report_progress(done, total, message), loop)
+
+        stats = await asyncio.to_thread(
+            search.update_database,
+            force_full_rebuild=force_rebuild,
+            limit=limit,
+            extract_fulltext=_utils.is_local_mode(),
+            progress_callback=_progress,
         )
 
         # Format results
@@ -943,6 +1099,7 @@ async def update_search_database(force_rebuild: bool = False, limit: int | None 
 
 @mcp.tool(
     name="zotero_get_search_database_status", description="Get status information about the semantic search database."
+    , annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 )
 @with_zotero_api_lock
 async def get_search_database_status(*, ctx: Context) -> str:
@@ -969,7 +1126,9 @@ async def get_search_database_status(*, ctx: Context) -> str:
             )
 
         # Determine config path
-        config_path = Path.home() / ".config" / "zotero-mcp" / "config.json"
+        from zotero_mcp.config import get_config_path
+
+        config_path = get_config_path()
 
         # Create semantic search instance
         search = create_semantic_search(str(config_path))
@@ -1008,3 +1167,218 @@ async def get_search_database_status(*, ctx: Context) -> str:
     except Exception as e:
         await ctx.error(f"Error getting database status: {str(e)}")
         return f"Error getting database status: {str(e)}"
+
+@mcp.tool(
+    name="zotero_suggest_tags",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+    description=(
+        "Use MCP Sampling to ask the client model for concise tag suggestions for one Zotero item. "
+        "Read-only: it does not write tags. If the client does not support sampling, returns a fallback message."
+    ),
+)
+@with_zotero_api_lock
+async def suggest_tags(item_key: str, max_tags: int = 5, *, ctx: Context) -> str:
+    """Suggest tags for a Zotero item using client-side MCP sampling."""
+    try:
+        max_tags = max(1, min(int(max_tags), 20))
+    except (TypeError, ValueError):
+        max_tags = 5
+
+    try:
+        zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
+        item = await _client.run_zotero_call(zot.item, item_key, operation=f"zot.item({item_key})")
+    except Exception as e:
+        await ctx.error(f"Error fetching item for tag suggestions: {e}")
+        return f"Error fetching item {item_key}: {e}"
+
+    data = item.get("data", {})
+    title = data.get("title", "Untitled")
+    abstract = data.get("abstractNote", "")
+    existing_tags = [t.get("tag", "") for t in data.get("tags", []) if t.get("tag")]
+    prompt = (
+        f"Suggest up to {max_tags} concise Zotero tags for this research item.\n"
+        "Return only a JSON array of lowercase tag strings.\n\n"
+        f"Title: {title}\n"
+        f"Existing tags: {', '.join(existing_tags) if existing_tags else 'none'}\n"
+        f"Abstract: {abstract[:4000] if abstract else 'not available'}"
+    )
+
+    try:
+        result = await ctx.sample(
+            prompt,
+            system_prompt="You create precise, reusable research-library tags.",
+            temperature=0.2,
+            max_tokens=min(300, 32 * max_tags + 100),
+        )
+    except Exception:
+        return (
+            "Sampling is not available in this MCP client. "
+            "Call zotero_get_item_metadata and ask the assistant to suggest tags manually."
+        )
+
+    text = getattr(result, "text", None) or getattr(result, "result", None) or str(result)
+    return f"# Suggested Tags for `{item_key}`\n\n{text}"
+
+
+@mcp.tool(
+    name="zotero_list_saved_searches",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+    description=(
+        "List all saved searches in your Zotero library (local mode only). "
+        "Shows each search's name and the conditions that define it. "
+        "Useful for discovering existing search workflows. "
+        "Scope: active library only."
+    ),
+)
+@with_zotero_api_lock
+async def list_saved_searches(*, ctx: Context) -> str:
+    """List all saved searches from the local Zotero database."""
+    from zotero_mcp.local_db import get_local_zotero_reader
+
+    reader = get_local_zotero_reader()
+    if not reader:
+        return "Saved searches are only available in local mode (ZOTERO_LOCAL=true)."
+    try:
+        searches = reader.get_saved_searches()
+        if not searches:
+            return "No saved searches found in your Zotero library."
+
+        output = [f"# Saved Searches ({len(searches)})", ""]
+        for s in searches:
+            output.append(f"## {s['name']}")
+            output.append(f"- Key: `{s['key']}`")
+            for cond in s["conditions"]:
+                req = " (required)" if cond["required"] == "all" else ""
+                output.append(f"  - {cond['condition']} {cond['operator']} `{cond['value']}`{req}")
+            output.append("")
+
+        return "\n".join(output)
+    except Exception as e:
+        await ctx.error(f"Error listing saved searches: {str(e)}")
+        return f"Error listing saved searches: {str(e)}"
+    finally:
+        reader.close()
+
+
+@mcp.tool(
+    name="zotero_execute_saved_search",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
+    description=(
+        "Execute a saved search by name and return matching items (local mode only). "
+        "Uses the Zotero Local API's native search execution for accurate results. "
+        "search_name: the exact name of the saved search (case-insensitive). "
+        "limit: max items to return (default 25). "
+        "Scope: active library only."
+    ),
+)
+@with_zotero_api_lock
+async def execute_saved_search(
+    search_name: str,
+    limit: int | str = 25,
+    *,
+    ctx: Context,
+) -> str:
+    """Execute a saved search by name using the Local API."""
+    from zotero_mcp.local_db import get_local_zotero_reader
+
+    reader = get_local_zotero_reader()
+    if not reader:
+        return "Saved searches are only available in local mode (ZOTERO_LOCAL=true)."
+    try:
+        searches = reader.get_saved_searches()
+        match = None
+        for s in searches:
+            if s["name"].lower() == search_name.lower():
+                match = s
+                break
+        if not match:
+            names = [s["name"] for s in searches]
+            return (
+                f"No saved search named '{search_name}'. "
+                f"Available searches: {', '.join(names) if names else 'none'}"
+            )
+
+        limit = _helpers._normalize_limit(limit, default=25)
+        search_key = match["key"]
+
+        # Try Local API native search execution first (most accurate)
+        try:
+            import requests as _requests
+
+            lib_type = "users"
+            lib_id = "0"
+            active = _client.get_active_library()
+            if active:
+                lib_type = active.get("library_type", "users")
+                lib_id = active.get("library_id", "0")
+            resp = _requests.get(
+                f"http://localhost:23119/api/{lib_type}/{lib_id}/searches/{search_key}/items",
+                params={"limit": limit, "sort": "dateAdded", "direction": "desc"},
+                headers={"Zotero-API-Version": "3"},
+                timeout=15,
+            )
+            if resp.status_code == 200:
+                items = resp.json()
+                if items:
+                    output = [
+                        f"# Results for Saved Search: {match['name']}",
+                        f"**Results:** {len(items)} items",
+                        "",
+                    ]
+                    for i, item in enumerate(items, 1):
+                        data = item.get("data", {})
+                        title = data.get("title", "Untitled")
+                        creators = _utils.format_creators(data.get("creators", []), max_authors=3)
+                        date = data.get("date", "")[:4] if data.get("date") else ""
+                        key = item.get("key", "")
+                        output.append(f"{i}. **{title}** ({date})")
+                        output.append(f"   Key: `{key}` | Authors: {creators}")
+                    return "\n".join(output)
+        except Exception as e:
+            await ctx.info(f"Local API search execution failed ({e}), falling back to keyword search")
+
+        # Fallback: translate conditions to keyword search
+        query_parts = []
+        for cond in match["conditions"]:
+            op = cond["operator"]
+            val = cond["value"]
+            if not val:
+                continue
+            if op == "contains":
+                query_parts.append(val)
+            elif op == "is":
+                query_parts.append(f'"{val}"')
+            elif op == "doesNotContain":
+                pass
+            elif op == "isNot":
+                pass
+            else:
+                query_parts.append(val)
+
+        if not query_parts:
+            return f"Saved search '{match['name']}' has no processable conditions."
+
+        query = " ".join(query_parts)
+        await ctx.info(f"Executing saved search '{match['name']}' via keyword: {query}")
+        zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
+        items = await _client.run_zotero_call(
+            zot.items, q=query, qmode="everything", limit=limit, sort="dateAdded", direction="desc",
+            operation=f"zot.items(saved_search:{match['name']})",
+        )
+
+        if not items:
+            return f"Saved search '{match['name']}' returned no results."
+
+        output = [f"# Results for Saved Search: {match['name']}", f"**Query:** {query}", f"**Results:** {len(items)} items", ""]
+        for i, item in enumerate(items, 1):
+            output.extend(
+                _utils.format_item_result(item, index=i, abstract_len=0, include_tags=False)
+            )
+
+        return "\n".join(output)
+
+    except Exception as e:
+        await ctx.error(f"Error executing saved search: {str(e)}")
+        return f"Error executing saved search: {str(e)}"
+    finally:
+        reader.close()

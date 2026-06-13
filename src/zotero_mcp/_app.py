@@ -5,7 +5,6 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager, suppress
-from pathlib import Path
 
 from fastmcp import FastMCP
 
@@ -23,9 +22,10 @@ logging.basicConfig(
 
 def _sync_semantic_update() -> None:
     """Check for and run semantic search auto-update (called in a worker thread)."""
+    from zotero_mcp.config import get_config_path
     from zotero_mcp.semantic_search import create_semantic_search
 
-    config_path = Path.home() / ".config" / "zotero-mcp" / "config.json"
+    config_path = get_config_path()
     if not config_path.exists():
         return
 

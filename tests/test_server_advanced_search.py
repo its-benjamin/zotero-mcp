@@ -17,9 +17,54 @@ class DummyContext:
 class FakeZotero:
     def __init__(self, items):
         self._items = items
+        self.last_kwargs: dict = {}
 
-    def items(self, start=0, limit=100, **_kwargs):
-        return self._items[start : start + limit]
+    def items(self, start=0, limit=100, **kwargs):
+        self.last_kwargs = kwargs
+        items = self._items
+        # Mirror Zotero API itemType filtering: "-type" excludes, "type" includes
+        item_type = kwargs.get("itemType", "")
+        if item_type:
+            excluded = set()
+            included = set()
+            for t in item_type.split():
+                if t.startswith("-"):
+                    excluded.add(t[1:])
+                else:
+                    included.add(t)
+            items = [
+                it
+                for it in items
+                if (not excluded or it.get("data", {}).get("itemType") not in excluded)
+                and (not included or it.get("data", {}).get("itemType") in included)
+            ]
+        # Server-side q/qmode filtering
+        q = kwargs.get("q", "")
+        if q:
+            q_lower = q.lower()
+            items = [
+                it
+                for it in items
+                if q_lower in it.get("data", {}).get("title", "").lower()
+                or any(
+                    q_lower in (c.get("lastName", "") + " " + c.get("firstName", "")).lower()
+                    for c in it.get("data", {}).get("creators", [])
+                    if isinstance(c, dict)
+                )
+            ]
+        # Server-side tag filter
+        tag = kwargs.get("tag", "")
+        if tag:
+            tags = [tag] if isinstance(tag, str) else tag
+            items = [
+                it
+                for it in items
+                if all(
+                    any(t.get("tag") == tg for t in it.get("data", {}).get("tags", []))
+                    for tg in tags
+                )
+            ]
+        return items[start : start + limit]
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -17,20 +18,42 @@ from zotero_mcp.rate_limiter import rate_limited_get
 
 ZOTERO_MCP_CONFIG_PATH = Path.home() / ".config" / "zotero-mcp" / "config.json"
 
+# Cache for config file reads (TTL: 60 seconds)
+_config_cache: dict | None = None
+_config_cache_ts: float = 0.0
+_CONFIG_CACHE_TTL: float = 60.0
+
 
 def _load_zotero_mcp_config() -> dict:
     """Return the parsed ``~/.config/zotero-mcp/config.json``, or ``{}``.
 
     Missing file or parse errors yield an empty dict so callers can use
     ``.get(...)`` chains without guarding.
+
+    Results are cached for 60 seconds to avoid repeated file I/O and JSON parsing.
     """
+    global _config_cache, _config_cache_ts
+
+    now = time.monotonic()
+    if _config_cache is not None and (now - _config_cache_ts) < _CONFIG_CACHE_TTL:
+        return _config_cache
+
     if not ZOTERO_MCP_CONFIG_PATH.exists():
-        return {}
+        result: dict = {}
+        _config_cache = result
+        _config_cache_ts = now
+        return result
     try:
         with open(ZOTERO_MCP_CONFIG_PATH, encoding="utf-8") as f:
-            return json.load(f) or {}
+            result = json.load(f) or {}
+            _config_cache = result
+            _config_cache_ts = now
+            return result
     except (json.JSONDecodeError, OSError):
-        return {}
+        result = {}
+        _config_cache = result
+        _config_cache_ts = now
+        return result
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +79,7 @@ def _paginate(zot_method, *args, max_items=None, **kwargs):
         if len(batch) < page_size:
             break
         start += page_size
-        if max_items and len(items) >= max_items:
+        if max_items is not None and max_items > 0 and len(items) >= max_items:
             items = items[:max_items]
             break
     return items
@@ -76,10 +99,17 @@ CROSSREF_TYPE_MAP = {
     "posted-content": "preprint",
     "monograph": "book",
     "reference-entry": "encyclopediaArticle",
-    "dataset": "document",
+    "dataset": "dataset",
     "peer-review": "document",
     "edited-book": "book",
-    "standard": "document",
+    "standard": "standard",
+    "proceedings": "conferencePaper",
+    "reference-book": "book",
+    "journal-issue": "document",
+    "journal-volume": "document",
+    "book-set": "book",
+    "book-part": "bookSection",
+    "book-section": "bookSection",
 }
 
 
@@ -186,7 +216,10 @@ def _normalize_limit(limit: int | str | None, default: int = 10, max_val: int = 
     if limit is None:
         return default
     if isinstance(limit, str):
-        limit = int(limit)
+        try:
+            limit = int(limit)
+        except (ValueError, TypeError):
+            return default
     return max(1, min(limit, max_val))
 
 
@@ -268,14 +301,22 @@ def _normalize_tag_filter(value) -> list[str]:
 
 
 async def _resolve_collection_names(zot, names, ctx=None):
-    """Resolve collection names to keys (case-insensitive)."""
+    """Resolve collection names to keys (case-insensitive). Cached for 60s."""
     if not names:
         return []
-    all_collections = _paginate(zot.collections)
+    from zotero_mcp.cache import TTLCache
+
+    if not hasattr(_resolve_collection_names, "_cache"):
+        _resolve_collection_names._cache = TTLCache(ttl_seconds=60.0, max_size=1)  # type: ignore[attr-defined]
+    cache = _resolve_collection_names._cache  # type: ignore[attr-defined]
+    all_collections = cache.get("all_collections")
+    if all_collections is None:
+        all_collections = _paginate(zot.collections)
+        cache.set("all_collections", all_collections or [])
     results = []
     for name in names:
         name_lower = name.lower()
-        matches = [c["key"] for c in all_collections if c.get("data", {}).get("name", "").lower() == name_lower]
+        matches = [c["key"] for c in (all_collections or []) if c.get("data", {}).get("name", "").lower() == name_lower]
         if not matches:
             raise ValueError(f"No collection found matching name '{name}'")
         if len(matches) > 1 and ctx is not None:
@@ -658,10 +699,25 @@ def _format_bbt_result(bbt_item: dict, citekey: str) -> str:
 # Token estimation helpers
 # ---------------------------------------------------------------------------
 
+# Cached tiktoken encoder (loaded once, reused)
+_tiktoken_encoder = None
+_tiktoken_loaded = False
+
 
 def _estimate_tokens(text: str) -> int:
-    """Rough token estimate at ~4 characters per token."""
-    return len(text) // 4
+    """Estimate token count. Uses tiktoken if available, else conservative heuristic."""
+    global _tiktoken_encoder, _tiktoken_loaded
+    if not _tiktoken_loaded:
+        _tiktoken_loaded = True
+        try:
+            import tiktoken
+            _tiktoken_encoder = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            _tiktoken_encoder = None
+    if _tiktoken_encoder is not None:
+        return len(_tiktoken_encoder.encode(text))
+    # Conservative fallback: ~3 chars/token (better for academic text with formulas/CJK)
+    return len(text) // 3
 
 
 def _prepend_size_warning(text: str, suggestions: str = "") -> str:
@@ -672,3 +728,13 @@ def _prepend_size_warning(text: str, suggestions: str = "") -> str:
     suggestion_text = f" {suggestions}" if suggestions else ""
     warning = f"*Response size: ~{est // 1000}K tokens.{suggestion_text}*\n\n"
     return warning + text
+
+
+async def _notify_library_changed(ctx) -> None:
+    """Best-effort notification that Zotero-backed resources may have changed."""
+    try:
+        from mcp.types import ResourceListChangedNotification
+
+        await ctx.send_notification(ResourceListChangedNotification())
+    except Exception:
+        pass

@@ -27,6 +27,53 @@ from zotero_mcp.rate_limiter import rate_limit
 from zotero_mcp.utils import suppress_stdout
 
 logger = logging.getLogger(__name__)
+_DOTENV_LOADED = False
+
+def _load_dotenv_once() -> None:
+    global _DOTENV_LOADED
+    if _DOTENV_LOADED:
+        return
+    _DOTENV_LOADED = True
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except Exception:
+        return
+
+def _get_persistent_windows_env(name: str) -> str | None:
+    """Read persistent Windows env vars when current process env is stale."""
+    if os.name != "nt":
+        return None
+    try:
+        import winreg
+    except ImportError:
+        return None
+
+    locations = (
+        (winreg.HKEY_CURRENT_USER, r"Environment"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
+    )
+    for root, path in locations:
+        try:
+            with winreg.OpenKey(root, path) as key:
+                value, _ = winreg.QueryValueEx(key, name)
+        except OSError:
+            continue
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+def _get_env(name: str, default: str | None = None) -> str | None:
+    """Return env var, loading .env and then Windows user/machine env if needed."""
+    value = os.getenv(name)
+    if value:
+        return value
+    _load_dotenv_once()
+    value = os.getenv(name)
+    if value:
+        return value
+    return _get_persistent_windows_env(name) or default
 
 
 class OpenAIEmbeddingFunction(EmbeddingFunction):
@@ -52,8 +99,8 @@ class OpenAIEmbeddingFunction(EmbeddingFunction):
         import threading as _threading
 
         self.model_name = model_name
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
-        self.base_url = base_url or os.getenv("OPENAI_BASE_URL")
+        self.api_key = api_key or _get_env("OPENAI_API_KEY")
+        self.base_url = base_url or _get_env("OPENAI_BASE_URL")
         self.request_batch_size = int(request_batch_size) if request_batch_size else self.DEFAULT_REQUEST_BATCH_SIZE
         self.rate_limit_rps: float | None = float(rate_limit_rps) if rate_limit_rps else None
         self._rate_lock = _threading.Lock()
@@ -183,8 +230,8 @@ class OpenRouterEmbeddingFunction(OpenAIEmbeddingFunction):
     ):
         super().__init__(
             model_name=model_name,
-            api_key=api_key or os.getenv("OPENROUTER_API_KEY"),
-            base_url=base_url or os.getenv("OPENROUTER_BASE_URL") or self.DEFAULT_BASE_URL,
+            api_key=api_key or _get_env("OPENROUTER_API_KEY"),
+            base_url=base_url or _get_env("OPENROUTER_BASE_URL") or self.DEFAULT_BASE_URL,
             request_batch_size=request_batch_size,
             rate_limit_rps=rate_limit_rps,
         )
@@ -252,16 +299,16 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
         # truncation limit, formally closing the cap-enforcement gap.
         if "gemini-embedding-2" in model_name:
             self.max_input_tokens = 8000 - self.V2_PREFIX_TOKEN_BUDGET
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        self.base_url = base_url or os.getenv("GEMINI_BASE_URL")
+        self.api_key = api_key or _get_env("GEMINI_API_KEY") or _get_env("GOOGLE_API_KEY")
+        self.base_url = base_url or _get_env("GEMINI_BASE_URL")
         self.output_dimensionality = self._normalize_optional_int(
-            output_dimensionality or os.getenv("GEMINI_OUTPUT_DIMENSIONALITY"),
+            output_dimensionality or _get_env("GEMINI_OUTPUT_DIMENSIONALITY"),
             default=self.DEFAULT_OUTPUT_DIMENSIONALITY,
             minimum=1,
             maximum=3072,
         )
         self.max_retries = self._normalize_int(
-            max_retries or os.getenv("GEMINI_MAX_RETRIES"),
+            max_retries or _get_env("GEMINI_MAX_RETRIES"),
             default=self.DEFAULT_MAX_RETRIES,
             minimum=0,
             maximum=12,
@@ -503,16 +550,16 @@ class VoyageEmbeddingFunction(EmbeddingFunction):
         output_dimension: int | None = None,
     ):
         self.model_name = model_name
-        self.api_key = api_key or os.getenv("VOYAGE_API_KEY")
-        self.base_url = base_url or os.getenv("VOYAGE_BASE_URL") or self._BASE_URL
-        configured_batch_size = request_batch_size or os.getenv("VOYAGE_REQUEST_BATCH_SIZE")
+        self.api_key = api_key or _get_env("VOYAGE_API_KEY")
+        self.base_url = base_url or _get_env("VOYAGE_BASE_URL") or self._BASE_URL
+        configured_batch_size = request_batch_size if request_batch_size is not None else _get_env("VOYAGE_REQUEST_BATCH_SIZE")
         self.request_batch_size = self._normalize_int(
             configured_batch_size,
             default=self.VOYAGE_MAX_BATCH,
             minimum=1,
             maximum=128,
         )
-        configured_retries = max_retries or os.getenv("VOYAGE_MAX_RETRIES")
+        configured_retries = max_retries if max_retries is not None else _get_env("VOYAGE_MAX_RETRIES")
         self.max_retries = self._normalize_int(
             configured_retries,
             default=self.DEFAULT_MAX_RETRIES,
@@ -520,12 +567,12 @@ class VoyageEmbeddingFunction(EmbeddingFunction):
             maximum=12,
         )
         self.tokens_per_minute = self._normalize_int(
-            tokens_per_minute or os.getenv("VOYAGE_TOKENS_PER_MINUTE"),
+            tokens_per_minute if tokens_per_minute is not None else _get_env("VOYAGE_TOKENS_PER_MINUTE"),
             default=self._default_tokens_per_minute(model_name),
             minimum=1_000,
             maximum=100_000_000,
         )
-        configured_output_dimension = output_dimension or os.getenv("VOYAGE_OUTPUT_DIMENSION")
+        configured_output_dimension = output_dimension if output_dimension is not None else _get_env("VOYAGE_OUTPUT_DIMENSION")
         self.output_dimension = self._normalize_optional_int(
             configured_output_dimension,
             default=self.DEFAULT_OUTPUT_DIMENSION,
@@ -1318,7 +1365,7 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
             logger.warning(f"Error loading config from {config_path}: {e}")
 
     # Load configuration from environment variables
-    env_embedding_model = os.getenv("ZOTERO_EMBEDDING_MODEL")
+    env_embedding_model = _get_env("ZOTERO_EMBEDDING_MODEL")
     if env_embedding_model:
         config["embedding_model"] = env_embedding_model
 
@@ -1330,13 +1377,13 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
     if config["embedding_model"] == "openai":
         ec = dict(config.get("embedding_config") or {})
         if not ec.get("api_key"):
-            env_key = os.getenv("OPENAI_API_KEY")
+            env_key = _get_env("OPENAI_API_KEY")
             if env_key:
                 ec["api_key"] = env_key
         if not ec.get("model_name"):
-            ec["model_name"] = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+            ec["model_name"] = _get_env("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
         if not ec.get("base_url"):
-            env_base = os.getenv("OPENAI_BASE_URL")
+            env_base = _get_env("OPENAI_BASE_URL")
             if env_base:
                 ec["base_url"] = env_base
         if ec.get("api_key"):
@@ -1345,13 +1392,13 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
     elif config["embedding_model"] == "gemini":
         ec = dict(config.get("embedding_config") or {})
         if not ec.get("api_key"):
-            env_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+            env_key = _get_env("GEMINI_API_KEY") or _get_env("GOOGLE_API_KEY")
             if env_key:
                 ec["api_key"] = env_key
         if not ec.get("model_name"):
-            ec["model_name"] = os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001")
+            ec["model_name"] = _get_env("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001")
         if not ec.get("base_url"):
-            env_base = os.getenv("GEMINI_BASE_URL")
+            env_base = _get_env("GEMINI_BASE_URL")
             if env_base:
                 ec["base_url"] = env_base
         ec.setdefault("output_dimensionality", GeminiEmbeddingFunction.DEFAULT_OUTPUT_DIMENSIONALITY)
@@ -1362,13 +1409,13 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
     elif config["embedding_model"] == "voyage":
         ec = dict(config.get("embedding_config") or {})
         if not ec.get("api_key"):
-            env_key = os.getenv("VOYAGE_API_KEY")
+            env_key = _get_env("VOYAGE_API_KEY")
             if env_key:
                 ec["api_key"] = env_key
         if not ec.get("model_name"):
-            ec["model_name"] = os.getenv("VOYAGE_EMBEDDING_MODEL", VoyageEmbeddingFunction.DEFAULT_MODEL_NAME)
+            ec["model_name"] = _get_env("VOYAGE_EMBEDDING_MODEL", VoyageEmbeddingFunction.DEFAULT_MODEL_NAME)
         if not ec.get("base_url"):
-            env_base = os.getenv("VOYAGE_BASE_URL")
+            env_base = _get_env("VOYAGE_BASE_URL")
             if env_base:
                 ec["base_url"] = env_base
         ec.setdefault("request_batch_size", VoyageEmbeddingFunction.VOYAGE_MAX_BATCH)
@@ -1381,13 +1428,13 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
     elif config["embedding_model"] == "openrouter":
         ec = dict(config.get("embedding_config") or {})
         if not ec.get("api_key"):
-            env_key = os.getenv("OPENROUTER_API_KEY")
+            env_key = _get_env("OPENROUTER_API_KEY")
             if env_key:
                 ec["api_key"] = env_key
         if not ec.get("model_name"):
-            ec["model_name"] = os.getenv("OPENROUTER_EMBEDDING_MODEL", OpenRouterEmbeddingFunction.DEFAULT_MODEL_NAME)
+            ec["model_name"] = _get_env("OPENROUTER_EMBEDDING_MODEL", OpenRouterEmbeddingFunction.DEFAULT_MODEL_NAME)
         if not ec.get("base_url"):
-            ec["base_url"] = os.getenv("OPENROUTER_BASE_URL", OpenRouterEmbeddingFunction.DEFAULT_BASE_URL)
+            ec["base_url"] = _get_env("OPENROUTER_BASE_URL", OpenRouterEmbeddingFunction.DEFAULT_BASE_URL)
         if ec.get("api_key"):
             config["embedding_config"] = ec
 

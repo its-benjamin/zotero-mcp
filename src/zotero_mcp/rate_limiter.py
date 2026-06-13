@@ -42,8 +42,11 @@ def _env_key(provider: str, suffix: str) -> str:
 
 def _get_provider_limit(provider: str) -> tuple[float, float]:
     default_requests, default_window = DEFAULT_PROVIDER_LIMITS.get(provider, (1, 1))
-    requests_per_window = float(os.getenv(_env_key(provider, "REQUESTS"), default_requests))
-    window_seconds = float(os.getenv(_env_key(provider, "WINDOW_SECONDS"), default_window))
+    try:
+        requests_per_window = float(os.getenv(_env_key(provider, "REQUESTS"), default_requests))
+        window_seconds = float(os.getenv(_env_key(provider, "WINDOW_SECONDS"), default_window))
+    except ValueError:
+        return default_requests, default_window
     if requests_per_window <= 0 or window_seconds <= 0:
         return default_requests, default_window
     return requests_per_window, window_seconds

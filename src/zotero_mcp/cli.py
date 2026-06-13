@@ -140,14 +140,17 @@ def setup_zotero_environment():
         claude_env_vars = load_claude_desktop_env_vars()
         apply_environment_variables(claude_env_vars)
 
-    # Apply fallback defaults for local Zotero if no config found.
-    # Only apply when no API key is configured — if an API key exists,
-    # the user intends web API mode and we should not force local mode.
-    if not os.environ.get("ZOTERO_API_KEY"):
+    # Local-first default for reads. If neither standalone config, Claude
+    # config, nor process env chooses a mode, try Zotero Desktop first and let
+    # client.py fall back to web credentials when auto-local is unreachable.
+    prefer_local = str(os.environ.get("ZOTERO_PREFER_LOCAL", "true")).lower() not in ("0", "false", "no")
+    if prefer_local and "ZOTERO_LOCAL" not in os.environ:
         fallback_env_vars = {
             "ZOTERO_LOCAL": "true",
-            "ZOTERO_LIBRARY_ID": "0",
+            "ZOTERO_LOCAL_AUTO": "true",
         }
+        if not os.environ.get("ZOTERO_LIBRARY_ID"):
+            fallback_env_vars["ZOTERO_LIBRARY_ID"] = "0"
         apply_environment_variables(fallback_env_vars)
 
 
@@ -199,8 +202,10 @@ def _run_doctor():
         from zotero_mcp.fts_index import get_fts_index
 
         fts = get_fts_index()
-        status = "exists" if fts.exists else "not built"
-        print(f"[OK] FTS sidecar: {status}")
+        if fts.exists:
+            print("[OK] FTS sidecar: exists")
+        else:
+            print("[WARN] FTS sidecar: not built (run 'zotero-mcp build-fts' to build)")
     except Exception as exc:
         print(f"[WARN] FTS sidecar: could not inspect ({exc})")
 
@@ -314,6 +319,21 @@ def main():
 
     # Doctor command
     subparsers.add_parser("doctor", help="Diagnose zotero-mcp setup (config, API key, local DB, FTS, semantic index)")
+
+    # Build FTS command
+    build_fts_parser = subparsers.add_parser("build-fts", help="Build/rebuild the FTS sidecar index for notes and annotations")
+    build_fts_parser.add_argument("--db-path", help="Path to Zotero database file (zotero.sqlite)")
+
+    # Search command
+    search_parser = subparsers.add_parser("search", help="Search Zotero library from the command line")
+    search_parser.add_argument("query", help="Search query")
+    search_parser.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
+    search_parser.add_argument("--type", dest="item_type", help="Filter by item type (e.g., journalArticle, book)")
+
+    # Export command
+    export_parser = subparsers.add_parser("export", help="Export Zotero items in various formats")
+    export_parser.add_argument("keys", help="Comma-separated item keys to export")
+    export_parser.add_argument("--format", dest="export_format", default="bibtex", help="Export format (bibtex, ris, csljson, etc.)")
 
     args = parser.parse_args()
 
@@ -438,6 +458,129 @@ def main():
 
     elif args.command == "doctor":
         _run_doctor()
+        sys.exit(0)
+
+    elif args.command == "build-fts":
+        setup_zotero_environment()
+        from zotero_mcp.fts_index import get_fts_index
+
+        # Find the Zotero DB path
+        db_path = args.db_path
+        if not db_path:
+            from zotero_mcp.config import load_config
+
+            config = load_config()
+            db_path = config.get("semantic_search", {}).get("zotero_db_path")
+        if not db_path:
+            db_path = os.environ.get("ZOTERO_DB_PATH")
+        if not db_path:
+            # Try default locations
+            import platform
+
+            if platform.system() == "Windows":
+                default_path = Path.home() / "AppData" / "Roaming" / "Zotero" / "Zotero" / "Profiles"
+            elif platform.system() == "Darwin":
+                default_path = Path.home() / "Library" / "Application Support" / "Zotero" / "Profiles"
+            else:
+                default_path = Path.home() / ".zotero" / "profiles"
+
+            if default_path.exists():
+                for profile_dir in default_path.iterdir():
+                    candidate = profile_dir / "zotero.sqlite"
+                    if candidate.exists():
+                        db_path = str(candidate)
+                        break
+
+        if not db_path or not Path(db_path).exists():
+            print("[ERROR] Could not find Zotero database. Pass --db-path or set ZOTERO_DB_PATH.")
+            sys.exit(1)
+
+        print(f"Building FTS index from: {db_path}")
+        import sqlite3
+
+        try:
+            zotero_conn = sqlite3.connect(f"file:{db_path}?mode=immutable", uri=True)
+            fts = get_fts_index()
+            count = fts.populate_from_zotero_db(zotero_conn)
+            zotero_conn.close()
+            print(f"[OK] FTS index built: {count} entries indexed")
+        except Exception as e:
+            print(f"[ERROR] Failed to build FTS index: {e}")
+            sys.exit(1)
+        sys.exit(0)
+
+    elif args.command == "search":
+        setup_zotero_environment()
+        from zotero_mcp import client as _client
+        from zotero_mcp import utils as _utils
+
+        try:
+            zot = _client.get_zotero_client()
+            params = {"q": args.query, "qmode": "titleCreatorYear", "limit": args.limit}
+            if args.item_type:
+                params["itemType"] = args.item_type
+            else:
+                params["itemType"] = "-attachment -note -annotation"
+            zot.add_parameters(**params)
+            items = zot.items()
+
+            if not items:
+                print(f"No items found matching '{args.query}'")
+                sys.exit(0)
+
+            print(f"Found {len(items)} items matching '{args.query}':\n")
+            for i, item in enumerate(items, 1):
+                data = item.get("data", {})
+                title = data.get("title", "Untitled")
+                creators = _utils.format_creators(data.get("creators", []), max_authors=3)
+                date = data.get("date", "")[:4] if data.get("date") else ""
+                key = item.get("key", "")
+                item_type = data.get("itemType", "")
+                print(f"{i}. [{item_type}] {title} ({date})")
+                print(f"   Key: {key} | Authors: {creators}")
+        except Exception as e:
+            print(f"[ERROR] Search failed: {e}")
+            sys.exit(1)
+        sys.exit(0)
+
+    elif args.command == "export":
+        setup_zotero_environment()
+        from zotero_mcp import client as _client
+
+        keys = [k.strip() for k in args.keys.split(",") if k.strip()]
+        if not keys:
+            print("[ERROR] No item keys provided.")
+            sys.exit(1)
+
+        try:
+            zot = _client.get_zotero_client()
+            joined = ",".join(keys)
+
+            # Try API-based export
+            import requests as _requests
+
+            base_url = "http://localhost:23119/api/users/0"
+            resp = _requests.get(
+                f"{base_url}/items",
+                params={"itemKey": joined, "format": args.export_format},
+                headers={"Zotero-API-Version": "3"},
+                timeout=30,
+            )
+            if resp.status_code == 200 and resp.text.strip():
+                print(resp.text.strip())
+            else:
+                # Fallback: BibTeX generation
+                if args.export_format == "bibtex":
+                    items = zot.items(itemKey=joined)
+                    for item in items:
+                        print(_client.generate_bibtex(item))
+                        print()
+                else:
+                    print(f"[ERROR] Export failed (HTTP {resp.status_code})")
+                    sys.exit(1)
+        except Exception as e:
+            print(f"[ERROR] Export failed: {e}")
+            sys.exit(1)
         sys.exit(0)
 
     elif args.command == "setup":

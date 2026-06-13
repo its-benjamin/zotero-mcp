@@ -33,6 +33,7 @@ except Exception:
 from .chroma_client import ChromaClient, create_chroma_client
 from .client import get_zotero_client
 from .local_db import LocalZoteroReader
+from .rate_limiter import _get_provider_limit
 from .utils import format_creators, is_local_mode, suppress_stdout
 
 logger = logging.getLogger(__name__)
@@ -614,6 +615,9 @@ class ZoteroSemanticSearch:
             # Load per-run config, including extraction limits and db path if provided
             pdf_max_pages = None
             pdf_timeout = 30
+            pdf_backend = None
+            pdf_use_ocr = False
+            paddleocr_lang = None
             zotero_db_path = self.db_path  # CLI override takes precedence
             # If semantic_search config file exists, prefer its setting
             try:
@@ -624,6 +628,9 @@ class ZoteroSemanticSearch:
                         extraction_cfg = semantic_cfg.get("extraction", {})
                         pdf_max_pages = extraction_cfg.get("pdf_max_pages")
                         pdf_timeout = extraction_cfg.get("pdf_timeout", 30)
+                        pdf_backend = extraction_cfg.get("pdf_backend")
+                        pdf_use_ocr = bool(extraction_cfg.get("pdf_use_ocr", False))
+                        paddleocr_lang = extraction_cfg.get("paddleocr_lang")
                         # Use config db_path only if no CLI override
                         if not zotero_db_path:
                             zotero_db_path = semantic_cfg.get("zotero_db_path")
@@ -633,7 +640,12 @@ class ZoteroSemanticSearch:
             with (
                 suppress_stdout(),
                 LocalZoteroReader(
-                    db_path=zotero_db_path, pdf_max_pages=pdf_max_pages, pdf_timeout=pdf_timeout
+                    db_path=zotero_db_path,
+                    pdf_max_pages=pdf_max_pages,
+                    pdf_timeout=pdf_timeout,
+                    pdf_backend=pdf_backend,
+                    pdf_use_ocr=pdf_use_ocr,
+                    paddleocr_lang=paddleocr_lang,
                 ) as reader,
             ):
                 # Phase 1: fetch metadata only (fast)
@@ -1146,13 +1158,8 @@ class ZoteroSemanticSearch:
         limits = httpx.Limits(max_connections=workers, max_keepalive_connections=workers)
         semaphore = asyncio.Semaphore(workers)
         limiter = asyncio.Lock()
-        try:
-            requests_per_window = float(os.getenv("ZOTERO_MCP_RATE_ZOTERO_REQUESTS", "6"))
-            window_seconds = float(os.getenv("ZOTERO_MCP_RATE_ZOTERO_WINDOW_SECONDS", "1"))
-        except ValueError:
-            requests_per_window = 6.0
-            window_seconds = 1.0
-        min_interval = window_seconds / requests_per_window if requests_per_window > 0 else 0.0
+        requests_per_window, window_seconds = _get_provider_limit("zotero")
+        min_interval = window_seconds / requests_per_window
         next_allowed = [0.0]
 
         async with httpx.AsyncClient(headers=headers, timeout=timeout, limits=limits) as client:
@@ -1475,6 +1482,7 @@ class ZoteroSemanticSearch:
         limit: int | None = None,
         extract_fulltext: bool = False,
         include_fulltext: bool | None = None,
+        progress_callback=None,
     ) -> dict[str, Any]:
         """
         Update the semantic search database with Zotero items.
@@ -1721,6 +1729,12 @@ class ZoteroSemanticSearch:
                         pass
 
                 batch_stats = self._process_item_batch(batch, force_full_rebuild, _failed_docs)
+
+                if progress_callback is not None:
+                    try:
+                        progress_callback(seen_items, total, f"Indexed {seen_items}/{total} items")
+                    except Exception:
+                        pass
 
                 stats["processed_items"] += batch_stats["processed"]
                 stats["added_items"] += batch_stats["added"]
@@ -2056,43 +2070,55 @@ class ZoteroSemanticSearch:
         documents = chroma_results.get("documents", [[]])[0]
         metadatas = chroma_results.get("metadatas", [[]])[0]
 
+        # Collect unique parent keys for batch fetching
+        parent_keys = []
+        key_order = []
         for i, chunk_id in enumerate(ids):
             meta = metadatas[i] if i < len(metadatas) else {}
             parent_key = (meta or {}).get("parent_item_key")
             if not parent_key:
                 parent_key = chunk_id.split("__", 1)[0] if "__" in chunk_id else chunk_id
+            parent_keys.append(parent_key)
+            key_order.append(i)
+
+        # Batch-fetch all items in a single API call
+        unique_keys = list(dict.fromkeys(parent_keys))  # deduplicate preserving order
+        items_by_key = {}
+        if unique_keys:
             try:
-                # Get full item data from Zotero
-                zotero_item = self.zotero_client.item(parent_key)
-
-                enriched_result = {
-                    "item_key": parent_key,
-                    "chunk_id": chunk_id,
-                    "chunk_index": (meta or {}).get("chunk_index"),
-                    "similarity_score": 1 - distances[i] if i < len(distances) else 0,
-                    "matched_text": documents[i] if i < len(documents) else "",
-                    "metadata": meta,
-                    "zotero_item": zotero_item,
-                    "query": query,
-                }
-
-                enriched.append(enriched_result)
-
+                joined = ",".join(unique_keys)
+                items = self.zotero_client.itemKey(joined)
+                if items:
+                    for item in items:
+                        items_by_key[item.get("key", "")] = item
             except Exception as e:
-                logger.error(f"Error enriching result for item {parent_key}: {e}")
-                # Include basic result even if enrichment fails
-                enriched.append(
-                    {
-                        "item_key": parent_key,
-                        "chunk_id": chunk_id,
-                        "chunk_index": (meta or {}).get("chunk_index"),
-                        "similarity_score": 1 - distances[i] if i < len(distances) else 0,
-                        "matched_text": documents[i] if i < len(documents) else "",
-                        "metadata": meta,
-                        "query": query,
-                        "error": f"Could not fetch full item data: {e}",
-                    }
-                )
+                logger.warning(f"Batch item fetch failed, falling back to sequential: {e}")
+
+        for i, chunk_id in enumerate(ids):
+            meta = metadatas[i] if i < len(metadatas) else {}
+            parent_key = parent_keys[i]
+
+            zotero_item = items_by_key.get(parent_key)
+            enriched_result = {
+                "item_key": parent_key,
+                "chunk_id": chunk_id,
+                "chunk_index": (meta or {}).get("chunk_index"),
+                "similarity_score": 1 - distances[i] if i < len(distances) else 0,
+                "matched_text": documents[i] if i < len(documents) else "",
+                "metadata": meta,
+                "zotero_item": zotero_item,
+                "query": query,
+            }
+
+            if not zotero_item:
+                # Try individual fetch as fallback
+                try:
+                    zotero_item = self.zotero_client.item(parent_key)
+                    enriched_result["zotero_item"] = zotero_item
+                except Exception as e:
+                    enriched_result["error"] = f"Could not fetch full item data: {e}"
+
+            enriched.append(enriched_result)
 
         return enriched
 
@@ -2117,9 +2143,17 @@ class ZoteroSemanticSearch:
             return False
 
 
+# Cache for semantic search instances to avoid repeated model loading
+_semantic_search_cache: dict[tuple, tuple[float, ZoteroSemanticSearch]] = {}
+_SEMANTIC_SEARCH_CACHE_TTL = 300.0  # 5 minutes
+
+
 def create_semantic_search(config_path: str | None = None, db_path: str | None = None) -> ZoteroSemanticSearch:
     """
     Create a ZoteroSemanticSearch instance.
+
+    Caches instances based on (config_path, db_path) to avoid repeatedly
+    loading ChromaDB clients and embedding models (sentence-transformers, etc.).
 
     Args:
         config_path: Path to configuration file
@@ -2128,4 +2162,30 @@ def create_semantic_search(config_path: str | None = None, db_path: str | None =
     Returns:
         Configured ZoteroSemanticSearch instance
     """
-    return ZoteroSemanticSearch(config_path=config_path, db_path=db_path)
+    cache_key = (config_path, db_path)
+    now = time.monotonic()
+
+    # Check cache
+    cached = _semantic_search_cache.get(cache_key)
+    if cached and (now - cached[0]) < _SEMANTIC_SEARCH_CACHE_TTL:
+        logger.debug(f"[SEMANTIC] Cache hit for {cache_key}")
+        return cached[1]
+
+    # Create new instance
+    logger.debug(f"[SEMANTIC] Cache miss for {cache_key}, creating new instance")
+    instance = ZoteroSemanticSearch(config_path=config_path, db_path=db_path)
+
+    # Cache it
+    _semantic_search_cache[cache_key] = (now, instance)
+
+    # Evict stale entries
+    stale = [k for k, (ts, _) in _semantic_search_cache.items() if (now - ts) > _SEMANTIC_SEARCH_CACHE_TTL]
+    for k in stale:
+        del _semantic_search_cache[k]
+
+    return instance
+
+
+def clear_semantic_search_cache() -> None:
+    """Clear all cached semantic search instances."""
+    _semantic_search_cache.clear()

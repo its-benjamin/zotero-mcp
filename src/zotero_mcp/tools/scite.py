@@ -15,8 +15,9 @@ Scite MCP server: https://scite.ai/mcp
 
 from __future__ import annotations
 
-import asyncio
 import logging
+
+from mcp.types import ToolAnnotations
 
 from zotero_mcp import client as _client
 from zotero_mcp import scite_client as _scite
@@ -117,6 +118,7 @@ def enrich_items(items: list[dict]) -> dict[str, dict[str, str]]:
 
 @mcp.tool(
     name="scite_enrich_item",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
     description=(
         "Get a Scite citation report for a paper — supporting, contrasting, "
         "and mentioning citation counts plus retraction/correction alerts. "
@@ -135,11 +137,16 @@ async def enrich_item(
         if not doi and not item_key:
             return "Error: provide either a DOI or a Zotero item_key"
 
+        if item_key:
+            key_err = _helpers.validate_item_key(item_key)
+            if key_err:
+                return f"Error: {key_err}"
+
         # Resolve DOI from Zotero item if needed
         if not doi and item_key:
             await ctx.info(f"Looking up DOI for Zotero item {item_key}")
-            zot = _client.get_zotero_client()
-            item = await asyncio.to_thread(zot.item, item_key)
+            zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
+            item = await _client.run_zotero_call(zot.item, item_key, operation=f"zot.item({item_key})")
             if not item:
                 return f"Error: Zotero item '{item_key}' not found"
             doi = _extract_doi(item)
@@ -197,6 +204,7 @@ async def enrich_item(
 
 @mcp.tool(
     name="scite_enrich_search",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
     description=(
         "Search your Zotero library and enrich results with Scite citation "
         "data. Each result shows supporting/contrasting/mentioning tallies "
@@ -216,7 +224,7 @@ async def enrich_search(
         if not query.strip():
             return "Error: search query cannot be empty"
 
-        zot = _client.get_zotero_client()
+        zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
         limit_int = _helpers._normalize_limit(limit, default=10)
 
         await ctx.info(f"Searching Zotero for '{query}' and enriching with Scite data")
@@ -230,7 +238,7 @@ async def enrich_search(
             )
             return zot.items()
 
-        results = await asyncio.to_thread(_fetch_scite_results)
+        results = await _client.run_zotero_call(_fetch_scite_results, operation="zot.items(scite_search)")
 
         if not results:
             return f"No items found matching query: '{query}'"
@@ -260,6 +268,7 @@ async def enrich_search(
 
 @mcp.tool(
     name="scite_check_retractions",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=True),
     description=(
         "Scan items in your Zotero library for retractions, corrections, "
         "and other editorial notices using Scite data. Filter by collection, "
@@ -276,7 +285,7 @@ async def check_retractions(
 ) -> str:
     """Check Zotero items for editorial notices (retractions, corrections)."""
     try:
-        zot = _client.get_zotero_client()
+        zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
         limit_int = _helpers._normalize_limit(limit, default=50, max_val=500)
 
         # Fetch items
@@ -285,7 +294,10 @@ async def check_retractions(
             keys = await _helpers._resolve_collection_names(zot, [collection], ctx)
             if not keys:
                 return f"Collection '{collection}' not found"
-            items = await asyncio.to_thread(zot.collection_items, keys[0], limit=limit_int, itemType="-attachment")
+            items = await _client.run_zotero_call(
+                zot.collection_items, keys[0], limit=limit_int, itemType="-attachment",
+                operation=f"zot.collection_items({keys[0]})",
+            )
         elif tag:
             await ctx.info(f"Checking items tagged '{tag}' for retractions")
 
@@ -293,15 +305,16 @@ async def check_retractions(
                 zot.add_parameters(tag=tag, itemType="-attachment", limit=limit_int)
                 return zot.items()
 
-            items = await asyncio.to_thread(_fetch_tag_items)
+            items = await _client.run_zotero_call(_fetch_tag_items, operation="zot.items(scite_tag)")
         else:
             await ctx.info("Checking recent items for retractions")
-            items = await asyncio.to_thread(
+            items = await _client.run_zotero_call(
                 zot.items,
                 sort="dateModified",
                 direction="desc",
                 limit=limit_int,
                 itemType="-attachment",
+                operation="zot.items(scite_recent)",
             )
 
         if not items:

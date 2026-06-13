@@ -3,6 +3,30 @@
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _clear_runtime_caches():
+    """Clear module-level caches between tests so monkeypatched mocks
+    aren't masked by stale cached results from earlier tests."""
+    # Search result cache
+    from zotero_mcp.tools import search as _search_mod
+    _search_mod._search_cache.clear()
+
+    # Client singleton cache
+    from zotero_mcp import client as _client_mod
+    _client_mod.clear_client_cache()
+
+    # TTL caches (item, children, collections, tags, annotations)
+    from zotero_mcp.cache import invalidate_all_caches
+    invalidate_all_caches()
+
+    yield
+
+    # Post-test cleanup
+    _search_mod._search_cache.clear()
+    _client_mod.clear_client_cache()
+    invalidate_all_caches()
+
+
 class DummyContext:
     """No-op MCP context for unit tests."""
 

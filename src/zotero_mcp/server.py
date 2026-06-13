@@ -64,8 +64,10 @@ from zotero_mcp.tools.annotations import (  # noqa: F401
 from zotero_mcp.tools.connectors import (  # noqa: F401
     chatgpt_connector_search,
     connector_fetch,
+    mcp_capabilities,
 )
 from zotero_mcp.tools.retrieval import (  # noqa: F401
+    extract_pdf_pages,
     get_collection_items,
     get_collections,
     get_feed_items,
@@ -75,8 +77,10 @@ from zotero_mcp.tools.retrieval import (  # noqa: F401
     get_items_children,
     get_recent,
     get_tags,
+    list_client_roots,
     list_feeds,
     list_libraries,
+    render_pdf_pages,
     switch_library,
     validate_library_switch,
 )
@@ -89,6 +93,7 @@ from zotero_mcp.tools.search import (  # noqa: F401
     search_by_tag,
     search_items,
     semantic_search,
+    suggest_tags,
     update_search_database,
 )
 from zotero_mcp.tools.write import (  # noqa: F401

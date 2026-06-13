@@ -3,7 +3,7 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
-from zotero_mcp.rate_limiter import RateLimitedZotero, _call_with_rate_limit
+from zotero_mcp.rate_limiter import RateLimitedZotero, _call_with_rate_limit, _get_provider_limit
 
 
 class Response:
@@ -42,6 +42,11 @@ def test_rate_limited_zotero_wraps_methods(monkeypatch):
     assert calls[0] == {"provider": "zotero"}
     assert calls[1] == {"limit": 1}
     assert wrapped.library_id == "123"
+
+def test_invalid_rate_limit_env_falls_back_to_default(monkeypatch):
+    monkeypatch.setenv("ZOTERO_MCP_RATE_CROSSREF_REQUESTS", "not-a-number")
+
+    assert _get_provider_limit("crossref") == (1, 1)
 
 
 class _PyzoteroError(Exception):

@@ -409,6 +409,18 @@ class TestGeminiV2Support:
 
 
 class TestVoyageEmbedding:
+    def test_voyage_api_key_uses_windows_env_fallback(self, monkeypatch):
+        from zotero_mcp import chroma_client
+        from zotero_mcp.chroma_client import VoyageEmbeddingFunction
+
+        monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
+        monkeypatch.setattr(chroma_client, "_get_persistent_windows_env", lambda name: "persisted-key")
+        monkeypatch.setattr(VoyageEmbeddingFunction, "_create_client", lambda self: object())
+
+        ef = VoyageEmbeddingFunction(model_name="voyage-4-lite")
+
+        assert ef.api_key == "persisted-key"
+
     def test_voyage_call_uses_document_input_type_and_preserves_order(self, monkeypatch):
         from zotero_mcp.chroma_client import VoyageEmbeddingFunction
 
@@ -463,6 +475,15 @@ class TestVoyageEmbedding:
 
         assert result == [0.1, 0.2]
         assert captured["input_type"] == "query"
+
+    def test_voyage_explicit_zero_max_retries_is_preserved(self, monkeypatch):
+        from zotero_mcp.chroma_client import VoyageEmbeddingFunction
+
+        monkeypatch.setattr(VoyageEmbeddingFunction, "_create_client", lambda self: object())
+
+        ef = VoyageEmbeddingFunction(model_name="voyage-4-lite", api_key="test-key", max_retries=0)
+
+        assert ef.max_retries == 0
 
 
 class TestSearchUsesEmbedQuery:

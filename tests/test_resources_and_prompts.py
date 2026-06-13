@@ -56,6 +56,14 @@ class TestResources:
         assert "zotero://tags" in uris
         assert "zotero://recent" in uris
 
+    def test_resource_templates_registered(self):
+        templates = asyncio.run(mcp.list_resource_templates())
+        uris = {str(t.uri_template) for t in templates}
+        assert "zotero://item/{item_key}" in uris
+        assert "zotero://item/{item_key}/children" in uris
+        assert "zotero://collection/{collection_key}/items" in uris
+        assert "zotero://tag/{tag_name}/items" in uris
+
     @pytest.mark.asyncio
     async def test_library_info_resource(self, fake_zot):
         from zotero_mcp.resources import library_info
@@ -96,7 +104,7 @@ class TestPrompts:
     def test_prompts_registered(self):
         prompts = asyncio.run(mcp.list_prompts())
         names = {p.name for p in prompts}
-        assert {"summarize_paper", "compare_papers", "literature_review", "annotated_bibliography"} <= names
+        assert {"summarize_paper", "compare_papers", "literature_review", "annotated_bibliography", "find_relevant_papers", "prepare_citation_context"} <= names
 
     def test_summarize_paper_mentions_metadata_first(self):
         from zotero_mcp.prompts import summarize_paper
@@ -123,6 +131,25 @@ class TestPrompts:
         assert "transformer attention" in text
         assert "zotero_search_items" in text
         assert "zotero_semantic_search" in text
+
+
+    def test_find_relevant_papers_uses_semantic_search(self):
+        from zotero_mcp.prompts import find_relevant_papers
+
+        messages = find_relevant_papers(topic="climate adaptation", max_results=5)
+        text = messages[0].content.text
+        assert "climate adaptation" in text
+        assert "zotero_semantic_search" in text
+        assert "zotero://item/{item_key}" in text
+
+    def test_prepare_citation_context_uses_item_resources(self):
+        from zotero_mcp.prompts import prepare_citation_context
+
+        messages = prepare_citation_context(item_keys="AAAA1111, BBBB2222")
+        text = messages[0].content.text
+        assert "AAAA1111" in text and "BBBB2222" in text
+        assert "zotero_get_item_metadata" in text
+        assert "zotero://item/{item_key}" in text
 
     def test_annotated_bibliography_uses_collection_tools(self):
         from zotero_mcp.prompts import annotated_bibliography

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-05-26
+
+### Fixed
+- Embedding providers now load API keys from process environment, `.env`, and Windows persistent user/machine environment. This fixes Voyage semantic search when `VOYAGE_API_KEY` is set in Windows but the MCP process has a stale environment snapshot.
+
+### Changed
+- Version bump to 0.3.6.
+
 ## [0.3.5] - 2026-05-17
 
 ### Added
