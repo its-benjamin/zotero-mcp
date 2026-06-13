@@ -1168,58 +1168,6 @@ async def get_search_database_status(*, ctx: Context) -> str:
         return f"Error getting database status: {str(e)}"
 
 @mcp.tool(
-    name="zotero_suggest_tags",
-    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
-    description=(
-        "Use MCP Sampling to ask the client model for concise tag suggestions for one Zotero item. "
-        "Read-only: it does not write tags. If the client does not support sampling, returns a fallback message."
-    ),
-)
-@with_zotero_api_lock
-async def suggest_tags(item_key: str, max_tags: int = 5, *, ctx: Context) -> str:
-    """Suggest tags for a Zotero item using client-side MCP sampling."""
-    try:
-        max_tags = max(1, min(int(max_tags), 20))
-    except (TypeError, ValueError):
-        max_tags = 5
-
-    try:
-        zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
-        item = await _client.run_zotero_call(zot.item, item_key, operation=f"zot.item({item_key})")
-    except Exception as e:
-        await ctx.error(f"Error fetching item for tag suggestions: {e}")
-        return f"Error fetching item {item_key}: {e}"
-
-    data = item.get("data", {})
-    title = data.get("title", "Untitled")
-    abstract = data.get("abstractNote", "")
-    existing_tags = [t.get("tag", "") for t in data.get("tags", []) if t.get("tag")]
-    prompt = (
-        f"Suggest up to {max_tags} concise Zotero tags for this research item.\n"
-        "Return only a JSON array of lowercase tag strings.\n\n"
-        f"Title: {title}\n"
-        f"Existing tags: {', '.join(existing_tags) if existing_tags else 'none'}\n"
-        f"Abstract: {abstract[:4000] if abstract else 'not available'}"
-    )
-
-    try:
-        result = await ctx.sample(
-            prompt,
-            system_prompt="You create precise, reusable research-library tags.",
-            temperature=0.2,
-            max_tokens=min(300, 32 * max_tags + 100),
-        )
-    except Exception:
-        return (
-            "Sampling is not available in this MCP client. "
-            "Call zotero_get_item_metadata and ask the assistant to suggest tags manually."
-        )
-
-    text = getattr(result, "text", None) or getattr(result, "result", None) or str(result)
-    return f"# Suggested Tags for `{item_key}`\n\n{text}"
-
-
-@mcp.tool(
     name="zotero_list_saved_searches",
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
     description=(

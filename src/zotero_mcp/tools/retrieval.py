@@ -2265,39 +2265,6 @@ async def summarize_collection(
 
 
 @mcp.tool(
-    name="zotero_list_client_roots",
-    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
-    description=(
-        "List MCP client Roots (workspace folders/files) visible to this server. "
-        "Useful before importing local PDFs or updating project citation files."
-    ),
-)
-async def list_client_roots(*, ctx: Context) -> str:
-    """List client-provided MCP roots if the client supports Roots."""
-    try:
-        roots = await ctx.list_roots()
-    except Exception:
-        return (
-            "Roots are not available in this MCP client. "
-            "Use an absolute local path for file-based Zotero tools instead."
-        )
-
-    if not roots:
-        return "No client roots are available."
-
-    lines = ["# Client Roots", ""]
-    for root in roots:
-        if isinstance(root, dict):
-            uri = root.get("uri", "")
-            name = root.get("name") or "unnamed"
-        else:
-            uri = getattr(root, "uri", "")
-            name = getattr(root, "name", None) or "unnamed"
-        lines.append(f"- **{name}** — `{uri}`")
-    return "\n".join(lines)
-
-
-@mcp.tool(
     name="zotero_generate_bibliography",
     annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
     description=(

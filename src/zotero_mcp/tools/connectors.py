@@ -167,41 +167,5 @@ async def connector_fetch(id: str, *, ctx: Context) -> str:
             {"id": id, "title": "", "text": "", "url": "", "metadata": {"error": str(e)}}, separators=(",", ":")
         )
 
-@mcp.tool(
-    name="zotero_mcp_capabilities",
-    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
-    description=(
-        "Report which MCP protocol surfaces this Zotero server implements, "
-        "and which FastMCP features remain intentionally unsupported."
-    ),
-)
-async def mcp_capabilities(*, ctx: Context) -> str:
-    """Return a concise MCP feature matrix for AI clients and CLI users."""
-    await ctx.info("Reporting Zotero MCP capability matrix")
-    return "\n".join(
-        [
-            "# Zotero MCP Capability Matrix",
-            "",
-            "## Implemented",
-            "- Tools: Zotero search, retrieval, annotations, write operations, Scite, connectors.",
-            "- Tool annotations: read-only/destructive/idempotent/open-world hints on tools.",
-            "- Resources: library info, collections, tags, recent items.",
-            "- Resource Templates: item, item children, collection items, tag items.",
-            "- Prompts: paper summaries, comparison, literature review, annotated bibliography, discovery, citation context.",
-            "- Context Logging: info/warning/error messages from tools.",
-            "- Progress: semantic database update reports indexing progress when supported by the client.",
-            "- Elicitation: duplicate merge can ask the client for confirmation before destructive execution.",
-            "- Sampling: zotero_suggest_tags asks the client model for read-only tag suggestions.",
-            "- Roots: zotero_list_client_roots lists client workspace roots when available.",
-            "- Notifications: write tools send resources/list_changed after successful library mutations.",
-            "- Tasks: zotero_update_search_database is task-enabled when installed with fastmcp[tasks].",
-            "- Integrations: ChatGPT-compatible search/fetch tools and standalone CLI entry points.",
-            "",
-            "## Not implemented",
-            "- Apps / Generative UI / FastMCPApp / Interactive Tools / Custom HTML: not useful for stdio CLI clients yet.",
-            "- Client-only package: this project is a server plus standalone CLI, not an MCP client SDK.",
-            "- Transport management: delegated to FastMCP and client launch config rather than custom transport code.",
-            "- Server-side sampling models: sampling uses the connected MCP client model, not a server-owned LLM.",
-        ]
-    )
+
 
