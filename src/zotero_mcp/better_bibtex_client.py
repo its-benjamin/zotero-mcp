@@ -32,6 +32,7 @@ def _inject_citekey(bibtex_str: str, citation_key: str) -> str:
 
     return _EMPTY_CITEKEY_LINE.sub(_replace, bibtex_str, count=1)
 
+
 class ZoteroBetterBibTexAPI:
     """Class to interact with Zotero's local Better BibTeX JSON-RPC API"""
 
@@ -49,10 +50,10 @@ class ZoteroBetterBibTexAPI:
 
         self.base_url = f"http://127.0.0.1:{self.port}/better-bibtex/json-rpc"
         self.headers = {
-            'Content-Type': 'application/json',
-            'User-Agent': 'python/zotero-mcp',
-            'Accept': 'application/json',
-            'Connection': 'keep-alive',
+            "Content-Type": "application/json",
+            "User-Agent": "python/zotero-mcp",
+            "Accept": "application/json",
+            "Connection": "keep-alive",
         }
 
     def _make_request(self, method: str, params: list[Any] | dict[str, Any]) -> dict[str, Any]:
@@ -73,22 +74,17 @@ class ZoteroBetterBibTexAPI:
             "jsonrpc": "2.0",
             "method": method,
             "params": params,
-            "id": 1  # Adding an ID to the request
+            "id": 1,  # Adding an ID to the request
         }
 
         try:
-            response = requests.post(
-                self.base_url,
-                headers=self.headers,
-                data=json.dumps(payload),
-                timeout=30
-            )
+            response = requests.post(self.base_url, headers=self.headers, data=json.dumps(payload), timeout=30)
             response.raise_for_status()
             data = response.json()
 
             if "error" in data:
-                error_msg = str(data['error'].get('message', 'Unknown error'))
-                error_data = data['error'].get('data', '')
+                error_msg = str(data["error"].get("message", "Unknown error"))
+                error_data = data["error"].get("data", "")
                 if error_data:
                     error_msg += f": {error_data}"
                 raise Exception(f"API error: {error_msg}")
@@ -102,9 +98,7 @@ class ZoteroBetterBibTexAPI:
         """Check if Zotero is running and accessible."""
         try:
             response = requests.get(
-                f"http://127.0.0.1:{self.port}/better-bibtex/cayw?probe=true",
-                headers=self.headers,
-                timeout=5
+                f"http://127.0.0.1:{self.port}/better-bibtex/cayw?probe=true", headers=self.headers, timeout=5
             )
             return response.text == "ready"
         except Exception:
@@ -128,9 +122,7 @@ class ZoteroBetterBibTexAPI:
         """
         csl_json_translator = "36a3b0b5-bad0-4a04-b79b-441c7cef77db"
         try:
-            export_result = self._make_request(
-                "item.export", [[citekey], csl_json_translator]
-            )
+            export_result = self._make_request("item.export", [[citekey], csl_json_translator])
         except Exception as e:
             raise Exception(f"Could not export item for citekey {citekey}: {e}")
 
@@ -190,10 +182,10 @@ class ZoteroBetterBibTexAPI:
             A list of annotations
         """
         # Return empty list if attachment has no annotations
-        if not attachment.get('annotations'):
+        if not attachment.get("annotations"):
             return []
 
-        return attachment.get('annotations', [])
+        return attachment.get("annotations", [])
 
     def search_citekeys(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         """
@@ -218,14 +210,16 @@ class ZoteroBetterBibTexAPI:
             cite_key_results = []
             for item in search_results[:limit]:
                 # Ensure we have a cite key
-                if item.get('citekey'):
-                    cite_key_results.append({
-                        'citekey': item['citekey'],
-                        'title': item.get('title', 'No Title'),
-                        'creators': item.get('creators', []),
-                        'year': item.get('year', 'N/A'),
-                        'libraryID': item.get('libraryID')
-                    })
+                if item.get("citekey"):
+                    cite_key_results.append(
+                        {
+                            "citekey": item["citekey"],
+                            "title": item.get("title", "No Title"),
+                            "creators": item.get("creators", []),
+                            "year": item.get("year", "N/A"),
+                            "libraryID": item.get("libraryID"),
+                        }
+                    )
 
             return cite_key_results
 
@@ -251,9 +245,7 @@ class ZoteroBetterBibTexAPI:
             # Step 1: Get citation key from item key. BBT's JSON-RPC expects
             # named params (``{"item_keys": [...]}``) and bare item keys —
             # not the ``library_id:item_key`` form — see #293.
-            citation_mapping = self._make_request(
-                "item.citationkey", {"item_keys": [item_key]}
-            )
+            citation_mapping = self._make_request("item.citationkey", {"item_keys": [item_key]})
 
             if not citation_mapping:
                 raise Exception(f"No citation key found for item: {item_key}")
@@ -264,23 +256,16 @@ class ZoteroBetterBibTexAPI:
                 raise Exception(f"Citation key not found for item: {item_key}")
 
             # Step 2: Export BibTeX using the citation key.
-            export_result = self._make_request(
-                "item.export",
-                [[citation_key], translator_id]
-            )
+            export_result = self._make_request("item.export", [[citation_key], translator_id])
 
             # Handle different response formats
             if isinstance(export_result, str):
                 bibtex_str = export_result
             elif isinstance(export_result, list) and len(export_result) > 0:
                 # Sometimes the result is wrapped in an array
-                bibtex_str = (
-                    export_result[0]
-                    if isinstance(export_result[0], str)
-                    else str(export_result[0])
-                )
-            elif isinstance(export_result, dict) and 'bibtex' in export_result:
-                bibtex_str = export_result['bibtex']
+                bibtex_str = export_result[0] if isinstance(export_result[0], str) else str(export_result[0])
+            elif isinstance(export_result, dict) and "bibtex" in export_result:
+                bibtex_str = export_result["bibtex"]
             else:
                 bibtex_str = str(export_result)
 
@@ -294,7 +279,9 @@ class ZoteroBetterBibTexAPI:
             return ""
 
 
-def process_annotation(annotation: dict[str, Any], attachment: dict[str, Any], format_type: str = 'markdown') -> dict[str, Any]:
+def process_annotation(
+    annotation: dict[str, Any], attachment: dict[str, Any], format_type: str = "markdown"
+) -> dict[str, Any]:
     """
     Process a raw Zotero annotation into a more usable format.
 
@@ -307,19 +294,19 @@ def process_annotation(annotation: dict[str, Any], attachment: dict[str, Any], f
         A processed annotation object
     """
     try:
-        annotation_type = annotation.get('annotationType', 'unknown')
-        color = annotation.get('annotationColor', '')
+        annotation_type = annotation.get("annotationType", "unknown")
+        color = annotation.get("annotationColor", "")
 
         # Extract text content
-        text = annotation.get('annotationText', '')
-        comment = annotation.get('annotationComment', '')
+        text = annotation.get("annotationText", "")
+        comment = annotation.get("annotationComment", "")
 
         # Handle page information
-        page_label = annotation.get('annotationPageLabel', '1')
+        page_label = annotation.get("annotationPageLabel", "1")
         page = 1
 
         # Get position data
-        position = annotation.get('annotationPosition', {})
+        position = annotation.get("annotationPosition", {})
 
         if isinstance(position, str):
             try:
@@ -329,12 +316,12 @@ def process_annotation(annotation: dict[str, Any], attachment: dict[str, Any], f
 
         if position:
             # Get page index if available
-            if 'pageIndex' in position:
-                page = position['pageIndex'] + 1
+            if "pageIndex" in position:
+                page = position["pageIndex"] + 1
 
             # Get coordinates if available
-            if 'rects' in position and position['rects'] and len(position['rects'][0]) >= 2:
-                x, y = position['rects'][0][0], position['rects'][0][1]
+            if "rects" in position and position["rects"] and len(position["rects"][0]) >= 2:
+                x, y = position["rects"][0][0], position["rects"][0][1]
             else:
                 x, y = 0, 0
         else:
@@ -342,33 +329,34 @@ def process_annotation(annotation: dict[str, Any], attachment: dict[str, Any], f
 
         # Create result object
         result = {
-            'id': annotation.get('key', ''),
-            'type': annotation_type,
-            'color': color,
-            'annotatedText': text,
-            'comment': comment,
-            'page': page,
-            'pageLabel': page_label,
-            'x': x,
-            'y': y,
-            'date': annotation.get('dateModified', ''),
-            'attachment': {
-                'key': attachment.get('itemKey', ''),
-                'filename': os.path.basename(attachment.get('path', '')),
-                'title': attachment.get('title', 'PDF'),
-                'path': attachment.get('path', ''),
-            }
+            "id": annotation.get("key", ""),
+            "type": annotation_type,
+            "color": color,
+            "annotatedText": text,
+            "comment": comment,
+            "page": page,
+            "pageLabel": page_label,
+            "x": x,
+            "y": y,
+            "date": annotation.get("dateModified", ""),
+            "attachment": {
+                "key": attachment.get("itemKey", ""),
+                "filename": os.path.basename(attachment.get("path", "")),
+                "title": attachment.get("title", "PDF"),
+                "path": attachment.get("path", ""),
+            },
         }
 
         # If markdown format is requested, format the output
-        if format_type == 'markdown':
-            result['markdown'] = format_annotation_markdown(result)
+        if format_type == "markdown":
+            result["markdown"] = format_annotation_markdown(result)
 
         return result
 
     except Exception as e:
         print(f"Error processing annotation: {e}")
         return {}
+
 
 def format_annotation_markdown(annotation: dict[str, Any]) -> str:
     """
@@ -383,15 +371,18 @@ def format_annotation_markdown(annotation: dict[str, Any]) -> str:
     md = []
 
     # Format the citation with text and page number
-    if annotation['annotatedText']:
-        color_str = f" {annotation['color']}" if annotation['color'] else ""
-        md.append(f"> \"{annotation['annotatedText']}\"{color_str} {annotation['type'].capitalize()} [Page {annotation['pageLabel']}]")
+    if annotation["annotatedText"]:
+        color_str = f" {annotation['color']}" if annotation["color"] else ""
+        md.append(
+            f'> "{annotation["annotatedText"]}"{color_str} {annotation["type"].capitalize()} [Page {annotation["pageLabel"]}]'
+        )
 
     # Add the comment if available
-    if annotation['comment']:
+    if annotation["comment"]:
         md.append(f"\n{annotation['comment']}")
 
     return "\n".join(md)
+
 
 def get_color_category(hex_color: str) -> str:
     """
@@ -412,7 +403,7 @@ def get_color_category(hex_color: str) -> str:
         "#a28ae5": "Purple",
         "#e56eee": "Magenta",
         "#f19837": "Orange",
-        "#aaaaaa": "Gray"
+        "#aaaaaa": "Gray",
     }
 
     return color_map.get(hex_color.lower(), "")

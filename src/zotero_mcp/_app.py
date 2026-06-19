@@ -48,9 +48,7 @@ def _sync_semantic_update() -> None:
 
     sys.stderr.write("Auto-updating semantic search database...\n")
     stats = search.update_database(extract_fulltext=is_local_mode())
-    sys.stderr.write(
-        f"Database update completed: {stats.get('processed_items', 0)} items processed\n"
-    )
+    sys.stderr.write(f"Database update completed: {stats.get('processed_items', 0)} items processed\n")
 
 
 @asynccontextmanager

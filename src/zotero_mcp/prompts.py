@@ -83,6 +83,7 @@ def annotated_bibliography(collection: str) -> list[Message]:
         )
     ]
 
+
 @mcp.prompt
 def find_relevant_papers(topic: str, max_results: int = 10) -> list[Message]:
     """Find papers relevant to a research topic without reading full PDFs first."""
@@ -97,6 +98,7 @@ def find_relevant_papers(topic: str, max_results: int = 10) -> list[Message]:
             "5. Avoid zotero_get_item_fulltext unless metadata and abstracts are insufficient."
         )
     ]
+
 
 @mcp.prompt
 def prepare_citation_context(item_keys: str) -> list[Message]:

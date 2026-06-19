@@ -338,7 +338,9 @@ def main():
     subparsers.add_parser("doctor", help="Diagnose zotero-mcp setup (config, API key, local DB, FTS, semantic index)")
 
     # Build FTS command
-    build_fts_parser = subparsers.add_parser("build-fts", help="Build/rebuild the FTS sidecar index for notes and annotations")
+    build_fts_parser = subparsers.add_parser(
+        "build-fts", help="Build/rebuild the FTS sidecar index for notes and annotations"
+    )
     build_fts_parser.add_argument("--db-path", help="Path to Zotero database file (zotero.sqlite)")
 
     # Search command
@@ -350,7 +352,9 @@ def main():
     # Export command
     export_parser = subparsers.add_parser("export", help="Export Zotero items in various formats")
     export_parser.add_argument("keys", help="Comma-separated item keys to export")
-    export_parser.add_argument("--format", dest="export_format", default="bibtex", help="Export format (bibtex, ris, csljson, etc.)")
+    export_parser.add_argument(
+        "--format", dest="export_format", default="bibtex", help="Export format (bibtex, ris, csljson, etc.)"
+    )
 
     args = parser.parse_args()
 

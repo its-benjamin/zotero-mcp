@@ -105,13 +105,39 @@ CSL_TYPE_MAP = {
 # ---------------------------------------------------------------------------
 
 _CORP_SUFFIXES = (
-    " inc", " inc.", " llc", " ltd", " ltd.", " corp", " corp.",
-    " gmbh", " ag", " plc", " co.", " co ", " s.a.", " s.a",
-    " university", " universität", " universite", " universidad",
-    " institute", " institut", " academy", " laboratory", " labs",
-    " consortium", " foundation", " association", " society",
-    " organization", " organisation", " committee", " council",
-    " group", " team",
+    " inc",
+    " inc.",
+    " llc",
+    " ltd",
+    " ltd.",
+    " corp",
+    " corp.",
+    " gmbh",
+    " ag",
+    " plc",
+    " co.",
+    " co ",
+    " s.a.",
+    " s.a",
+    " university",
+    " universität",
+    " universite",
+    " universidad",
+    " institute",
+    " institut",
+    " academy",
+    " laboratory",
+    " labs",
+    " consortium",
+    " foundation",
+    " association",
+    " society",
+    " organization",
+    " organisation",
+    " committee",
+    " council",
+    " group",
+    " team",
 )
 
 
@@ -133,18 +159,22 @@ def _parse_bibtex_author_list(raw: str) -> list[dict[str, str]]:
             continue
         if "," in name and name.count(",") == 1 and not _looks_corporate(name):
             last, first = [x.strip() for x in name.split(",", 1)]
-            creators.append({
-                "creatorType": "author",
-                "firstName": first,
-                "lastName": last,
-            })
+            creators.append(
+                {
+                    "creatorType": "author",
+                    "firstName": first,
+                    "lastName": last,
+                }
+            )
         elif " " in name and not _looks_corporate(name):
             first, last = name.rsplit(" ", 1)
-            creators.append({
-                "creatorType": "author",
-                "firstName": first.strip(),
-                "lastName": last.strip(),
-            })
+            creators.append(
+                {
+                    "creatorType": "author",
+                    "firstName": first.strip(),
+                    "lastName": last.strip(),
+                }
+            )
         else:
             creators.append({"creatorType": "author", "name": name})
     return creators
@@ -164,7 +194,7 @@ def _split_bibtex_authors(raw: str) -> list[str]:
         elif ch == "}":
             depth = max(0, depth - 1)
             buf.append(ch)
-        elif depth == 0 and raw[i:i + 5].lower() == " and ":
+        elif depth == 0 and raw[i : i + 5].lower() == " and ":
             out.append("".join(buf))
             buf = []
             i += 5
@@ -206,12 +236,29 @@ def _csl_names_to_creators(names: list[dict], creator_type: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 _MONTH_NAMES = {
-    "jan": "01", "january": "01", "feb": "02", "february": "02",
-    "mar": "03", "march": "03", "apr": "04", "april": "04",
-    "may": "05", "jun": "06", "june": "06", "jul": "07", "july": "07",
-    "aug": "08", "august": "08", "sep": "09", "september": "09",
-    "oct": "10", "october": "10", "nov": "11", "november": "11",
-    "dec": "12", "december": "12",
+    "jan": "01",
+    "january": "01",
+    "feb": "02",
+    "february": "02",
+    "mar": "03",
+    "march": "03",
+    "apr": "04",
+    "april": "04",
+    "may": "05",
+    "jun": "06",
+    "june": "06",
+    "jul": "07",
+    "july": "07",
+    "aug": "08",
+    "august": "08",
+    "sep": "09",
+    "september": "09",
+    "oct": "10",
+    "october": "10",
+    "nov": "11",
+    "november": "11",
+    "dec": "12",
+    "december": "12",
 }
 
 
@@ -224,8 +271,8 @@ def _format_bibtex_date(year: str, month: str, day: str, iso_date: str) -> str:
     day = (day or "").strip()
     if not year:
         return ""
-    month_num = _MONTH_NAMES.get(month.lower()[:3]) if month and not month.isdigit() else (
-        month.zfill(2) if month else ""
+    month_num = (
+        _MONTH_NAMES.get(month.lower()[:3]) if month and not month.isdigit() else (month.zfill(2) if month else "")
     )
     parts = [year]
     if month_num:
@@ -258,6 +305,7 @@ def _format_csl_date(issued: Any) -> str:
 # BibTeX parsing
 # ---------------------------------------------------------------------------
 
+
 def parse_bibtex(text: str) -> list[dict]:
     """Parse a BibTeX string and return a list of structured entries.
 
@@ -280,6 +328,7 @@ def parse_bibtex(text: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Container-field routing
 # ---------------------------------------------------------------------------
+
 
 def _pick_container_field(zot_type: str, template: dict) -> str | None:
     """Return the Zotero field name that holds the "container title" for this type."""
@@ -312,6 +361,7 @@ def _pick_container_field(zot_type: str, template: dict) -> str | None:
 # Extra-field helpers
 # ---------------------------------------------------------------------------
 
+
 def _append_extra(template: dict, line: str) -> None:
     if "extra" not in template:
         return
@@ -335,6 +385,7 @@ def _set_if_in_template(template: dict, field: str, value: str) -> bool:
 # ---------------------------------------------------------------------------
 # BibTeX -> Zotero
 # ---------------------------------------------------------------------------
+
 
 def bibtex_entry_to_zotero(
     entry: dict,
@@ -397,11 +448,7 @@ def bibtex_entry_to_zotero(
     # Container title (journal / booktitle / proceedings)
     container_field = _pick_container_field(zot_type, template)
     container_value = (
-        fields.get("journaltitle")
-        or fields.get("journal")
-        or fields.get("booktitle")
-        or fields.get("maintitle")
-        or ""
+        fields.get("journaltitle") or fields.get("journal") or fields.get("booktitle") or fields.get("maintitle") or ""
     ).strip()
     if container_field and container_value:
         template[container_field] = container_value
@@ -437,12 +484,7 @@ def bibtex_entry_to_zotero(
 
     # Institution / school fall back to publisher for report / thesis
     if "publisher" in template and not template["publisher"]:
-        fallback = (
-            fields.get("school")
-            or fields.get("institution")
-            or fields.get("organization")
-            or ""
-        ).strip()
+        fallback = (fields.get("school") or fields.get("institution") or fields.get("organization") or "").strip()
         if fallback:
             template["publisher"] = fallback
 
@@ -485,17 +527,50 @@ def bibtex_entry_to_zotero(
 
     # Preserve anything we didn't map
     handled = {
-        "title", "shorttitle", "author", "editor", "translator",
-        "year", "month", "day", "date",
-        "journal", "journaltitle", "booktitle", "maintitle",
-        "series", "seriesnumber",
-        "volume", "issue", "number", "pages",
-        "publisher", "address", "location", "edition",
-        "isbn", "issn", "language", "url", "doi", "abstract",
-        "keywords", "keyword", "note",
-        "school", "institution", "organization",
-        "eprint", "eprinttype", "archiveprefix", "primaryclass",
-        "pmid", "pmcid", "type", "pagetotal", "volumes",
+        "title",
+        "shorttitle",
+        "author",
+        "editor",
+        "translator",
+        "year",
+        "month",
+        "day",
+        "date",
+        "journal",
+        "journaltitle",
+        "booktitle",
+        "maintitle",
+        "series",
+        "seriesnumber",
+        "volume",
+        "issue",
+        "number",
+        "pages",
+        "publisher",
+        "address",
+        "location",
+        "edition",
+        "isbn",
+        "issn",
+        "language",
+        "url",
+        "doi",
+        "abstract",
+        "keywords",
+        "keyword",
+        "note",
+        "school",
+        "institution",
+        "organization",
+        "eprint",
+        "eprinttype",
+        "archiveprefix",
+        "primaryclass",
+        "pmid",
+        "pmcid",
+        "type",
+        "pagetotal",
+        "volumes",
     }
     for k, v in fields.items():
         if k.lower() in handled:
@@ -521,6 +596,7 @@ def _split_keywords(raw: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # CSL JSON -> Zotero
 # ---------------------------------------------------------------------------
+
 
 def csl_json_to_zotero(
     csl: dict,
@@ -615,13 +691,35 @@ def csl_json_to_zotero(
 
     # Preserve unmapped fields
     handled = {
-        "type", "id", "title", "title-short",
-        "author", "editor", "translator",
-        "issued", "container-title", "collection-title", "collection-number",
-        "volume", "issue", "page", "publisher", "publisher-place",
-        "edition", "ISBN", "ISSN", "DOI", "URL", "language",
-        "abstract", "number-of-pages", "number",
-        "genre", "keyword", "keywords", "note",
+        "type",
+        "id",
+        "title",
+        "title-short",
+        "author",
+        "editor",
+        "translator",
+        "issued",
+        "container-title",
+        "collection-title",
+        "collection-number",
+        "volume",
+        "issue",
+        "page",
+        "publisher",
+        "publisher-place",
+        "edition",
+        "ISBN",
+        "ISSN",
+        "DOI",
+        "URL",
+        "language",
+        "abstract",
+        "number-of-pages",
+        "number",
+        "genre",
+        "keyword",
+        "keywords",
+        "note",
     }
     for k, v in csl.items():
         if k in handled:
@@ -641,6 +739,7 @@ def csl_json_to_zotero(
 # ---------------------------------------------------------------------------
 # Input coercion helpers
 # ---------------------------------------------------------------------------
+
 
 def coerce_csl_json_input(value: Any) -> list[dict]:
     """Accept a CSL JSON string, single object, or list; return a list of dicts."""

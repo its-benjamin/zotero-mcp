@@ -375,9 +375,8 @@ class TestLinkedUrlRemoval:
         mock_arxiv.return_value = None
         mock_ss.return_value = None
         mock_pmc.return_value = None
-        # Download fails — _download_and_attach_pdf returns None on failure
-        # (suffix-string on success) since the WebDAV-routing change in #314.
-        mock_download.return_value = None
+        # Download fails
+        mock_download.return_value = False
 
         write_zot = self._make_write_zot()
         ctx = DummyContext()

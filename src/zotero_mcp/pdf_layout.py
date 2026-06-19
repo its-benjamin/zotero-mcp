@@ -24,12 +24,12 @@ from __future__ import annotations
 import re
 
 # Region filtering / merging thresholds (normalized page units)
-LAYOUT_MIN_REGION_AREA = 0.01       # drop regions smaller than 1% of page area
-LAYOUT_MAX_REGION_AREA = 0.95       # drop page-wide background artifacts
-LAYOUT_MERGE_GAP = 0.02             # merge fragments closer than 2% of page size
-LAYOUT_DEDUP_IOU = 0.8              # near-identical regions are duplicates
+LAYOUT_MIN_REGION_AREA = 0.01  # drop regions smaller than 1% of page area
+LAYOUT_MAX_REGION_AREA = 0.95  # drop page-wide background artifacts
+LAYOUT_MERGE_GAP = 0.02  # merge fragments closer than 2% of page size
+LAYOUT_DEDUP_IOU = 0.8  # near-identical regions are duplicates
 LAYOUT_CAPTION_MAX_DISTANCE = 0.15  # max caption-to-region vertical gap
-LAYOUT_CAPTION_MIN_OVERLAP = 0.3    # min horizontal overlap ratio (column guard)
+LAYOUT_CAPTION_MIN_OVERLAP = 0.3  # min horizontal overlap ratio (column guard)
 
 # Source priority when de-duplicating overlapping detections
 _LAYOUT_SOURCE_PRIORITY = {"table": 3, "image": 2, "drawing": 1, "merged": 0}
@@ -113,12 +113,7 @@ def _boxes_overlap_or_near(
     ax, ay, aw, ah = box_a
     bx, by, bw, bh = box_b
 
-    return not (
-        bx > ax + aw + gap
-        or bx + bw < ax - gap
-        or by > ay + ah + gap
-        or by + bh < ay - gap
-    )
+    return not (bx > ax + aw + gap or bx + bw < ax - gap or by > ay + ah + gap or by + bh < ay - gap)
 
 
 def _horizontal_overlap_ratio(box_a: list[float], box_b: list[float]) -> float:
@@ -177,10 +172,7 @@ def _merge_candidate_regions(
         key=lambda r: _LAYOUT_SOURCE_PRIORITY.get(r["source"], 0),
         reverse=True,
     ):
-        if any(
-            _bbox_iou(region["bbox"], existing["bbox"]) > dedup_iou
-            for existing in deduped
-        ):
+        if any(_bbox_iou(region["bbox"], existing["bbox"]) > dedup_iou for existing in deduped):
             continue
         deduped.append(region)
 
@@ -263,8 +255,8 @@ def _associate_captions_with_regions(
             if overlap < min_overlap:
                 continue
 
-            below_gap = c_y - (r_y + r_h)   # >= 0 when caption is below region
-            above_gap = r_y - (c_y + c_h)   # >= 0 when caption is above region
+            below_gap = c_y - (r_y + r_h)  # >= 0 when caption is below region
+            above_gap = r_y - (c_y + c_h)  # >= 0 when caption is above region
             if below_gap >= 0:
                 vertical_gap, position = below_gap, "below"
             elif above_gap >= 0:
@@ -351,10 +343,7 @@ def detect_page_regions(pdf_path: str, page_num: int) -> dict:
     try:
         import fitz
     except ImportError:
-        raise ImportError(
-            "PDF layout detection requires PyMuPDF. "
-            "Install it with: pip install zotero-mcp-server[pdf]"
-        )
+        raise ImportError("PDF layout detection requires PyMuPDF. Install it with: pip install zotero-mcp-server[pdf]")
 
     try:
         doc = fitz.open(pdf_path)
@@ -393,9 +382,7 @@ def detect_page_regions(pdf_path: str, page_num: int) -> dict:
         try:
             for info in page.get_image_info():
                 x0, y0, x1, y1 = info["bbox"]
-                raw_regions.append(
-                    {"source": "image", "bbox": normalize_bbox(x0, y0, x1, y1)}
-                )
+                raw_regions.append({"source": "image", "bbox": normalize_bbox(x0, y0, x1, y1)})
         except Exception:
             pass
 
@@ -413,17 +400,14 @@ def detect_page_regions(pdf_path: str, page_num: int) -> dict:
                 pass
         else:
             warnings.append(
-                "Vector graphics detection requires pymupdf>=1.24.2; "
-                "showing raster images and tables only."
+                "Vector graphics detection requires pymupdf>=1.24.2; showing raster images and tables only."
             )
 
         # --- Tables ---
         try:
             for table in page.find_tables().tables:
                 x0, y0, x1, y1 = table.bbox
-                raw_regions.append(
-                    {"source": "table", "bbox": normalize_bbox(x0, y0, x1, y1)}
-                )
+                raw_regions.append({"source": "table", "bbox": normalize_bbox(x0, y0, x1, y1)})
         except Exception:
             pass
 
@@ -445,16 +429,10 @@ def detect_page_regions(pdf_path: str, page_num: int) -> dict:
         # Scanned page: a page-covering image with no text layer is a scan,
         # not an annotatable figure
         full_page_images = [
-            r
-            for r in raw_regions
-            if r["source"] == "image"
-            and r["bbox"][2] * r["bbox"][3] > LAYOUT_MAX_REGION_AREA
+            r for r in raw_regions if r["source"] == "image" and r["bbox"][2] * r["bbox"][3] > LAYOUT_MAX_REGION_AREA
         ]
         if full_page_images and not text_blocks:
-            warnings.append(
-                "Page appears to be a full-page scan — region detection and "
-                "captions are unavailable."
-            )
+            warnings.append("Page appears to be a full-page scan — region detection and captions are unavailable.")
             return {
                 "pageIndex": target_index,
                 "pageLabel": _page_label_or_default(page, page_num),

@@ -174,10 +174,14 @@ async def batch_update_tags(
                     # the correct version number for the update
                     if write_zot is not zot:
                         try:
-                            web_item = await _client.run_zotero_call(write_zot.item, item_key, operation=f"write_zot.item({item_key})")
+                            web_item = await _client.run_zotero_call(
+                                write_zot.item, item_key, operation=f"write_zot.item({item_key})"
+                            )
                             web_item["data"]["tags"] = current_tags
                             await ctx.info(f"Updating item {item_key} via web API with tags: {current_tags}")
-                            result = await _client.run_zotero_call(write_zot.update_item, web_item, operation=f"write_zot.update_item({item_key})")
+                            result = await _client.run_zotero_call(
+                                write_zot.update_item, web_item, operation=f"write_zot.update_item({item_key})"
+                            )
                         except Exception as e:
                             await ctx.error(f"Failed to fetch/update item {item_key} via web API: {str(e)}")
                             skipped_count += 1
@@ -185,7 +189,9 @@ async def batch_update_tags(
                     else:
                         item["data"]["tags"] = current_tags
                         await ctx.info(f"Updating item {item_key} with tags: {current_tags}")
-                        result = await _client.run_zotero_call(write_zot.update_item, item, operation=f"write_zot.update_item({item_key})")
+                        result = await _client.run_zotero_call(
+                            write_zot.update_item, item, operation=f"write_zot.update_item({item_key})"
+                        )
 
                     if await _helpers._handle_write_response(result, ctx):
                         updated_count += 1
@@ -269,7 +275,9 @@ async def create_collection(name: str, parent_collection: str | None = None, *, 
         else:
             coll_data["parentCollection"] = False  # type: ignore[assignment]
 
-        result = await _client.run_zotero_call(write_zot.create_collections, [coll_data], operation="write_zot.create_collections")
+        result = await _client.run_zotero_call(
+            write_zot.create_collections, [coll_data], operation="write_zot.create_collections"
+        )
 
         if isinstance(result, dict) and result.get("success"):
             coll_key = next(iter(result["success"].values()))
@@ -326,7 +334,9 @@ async def search_collections(query: str, *, ctx: Context) -> str:
             lines.append(f"**Key:** `{key}`")
             if parent_key:
                 try:
-                    parent = await _client.run_zotero_call(zot.collection, parent_key, operation=f"zot.collection({parent_key})")
+                    parent = await _client.run_zotero_call(
+                        zot.collection, parent_key, operation=f"zot.collection({parent_key})"
+                    )
                     lines.append(f"**Parent:** {parent['data'].get('name', parent_key)}")
                 except Exception:
                     lines.append(f"**Parent key:** {parent_key}")
@@ -385,7 +395,9 @@ async def manage_collections(
         for coll_key in add_colls:
             for item_key in keys:
                 item_dict = await _get_item(item_key)
-                resp = await _client.run_zotero_call(write_zot.addto_collection, coll_key, item_dict, operation=f"write_zot.addto_collection({coll_key})")
+                resp = await _client.run_zotero_call(
+                    write_zot.addto_collection, coll_key, item_dict, operation=f"write_zot.addto_collection({coll_key})"
+                )
                 if await _helpers._handle_write_response(resp, ctx):
                     results.append(f"Added {item_key} to {coll_key}")
                     # Invalidate cache — version changed after addto_collection
@@ -396,7 +408,12 @@ async def manage_collections(
         for coll_key in remove_colls:
             for item_key in keys:
                 item_dict = await _get_item(item_key)
-                resp = await _client.run_zotero_call(write_zot.deletefrom_collection, coll_key, item_dict, operation=f"write_zot.deletefrom_collection({coll_key})")
+                resp = await _client.run_zotero_call(
+                    write_zot.deletefrom_collection,
+                    coll_key,
+                    item_dict,
+                    operation=f"write_zot.deletefrom_collection({coll_key})",
+                )
                 if await _helpers._handle_write_response(resp, ctx):
                     results.append(f"Removed {item_key} from {coll_key}")
                     item_cache.pop(item_key, None)
@@ -483,7 +500,9 @@ async def add_by_doi(
         zot_type = CROSSREF_TYPE_MAP.get(cr_type, "document")
 
         # Get valid fields from item template
-        template = await _client.run_zotero_call(write_zot.item_template, zot_type, operation=f"write_zot.item_template({zot_type})")
+        template = await _client.run_zotero_call(
+            write_zot.item_template, zot_type, operation=f"write_zot.item_template({zot_type})"
+        )
         item_data = dict(template)
 
         # Map fields
@@ -568,7 +587,9 @@ async def add_by_doi(
             item_data["collections"] = coll_keys
 
         # Create item
-        result = await _client.run_zotero_call(write_zot.create_items, [item_data], operation="write_zot.create_items(doi)")
+        result = await _client.run_zotero_call(
+            write_zot.create_items, [item_data], operation="write_zot.create_items(doi)"
+        )
 
         if isinstance(result, dict) and result.get("success"):
             item_key = next(iter(result["success"].values()))
@@ -659,7 +680,9 @@ async def add_by_url(
 
         # Generic webpage
         await ctx.info(f"Creating webpage item for: {url}")
-        template = await _client.run_zotero_call(write_zot.item_template, "webpage", operation="write_zot.item_template(webpage)")
+        template = await _client.run_zotero_call(
+            write_zot.item_template, "webpage", operation="write_zot.item_template(webpage)"
+        )
         template["url"] = url
         template["title"] = url
         template["accessDate"] = ""
@@ -671,7 +694,9 @@ async def add_by_url(
         if coll_keys:
             template["collections"] = coll_keys
 
-        result = await _client.run_zotero_call(write_zot.create_items, [template], operation="write_zot.create_items(webpage)")
+        result = await _client.run_zotero_call(
+            write_zot.create_items, [template], operation="write_zot.create_items(webpage)"
+        )
         if isinstance(result, dict) and result.get("success"):
             item_key = next(iter(result["success"].values()))
             return (
@@ -743,7 +768,9 @@ async def _add_by_arxiv(arxiv_id, collections, tags, write_zot, ctx):
             else:
                 authors.append({"creatorType": "author", "name": name})
 
-    template = await _client.run_zotero_call(write_zot.item_template, "preprint", operation="write_zot.item_template(preprint)")
+    template = await _client.run_zotero_call(
+        write_zot.item_template, "preprint", operation="write_zot.item_template(preprint)"
+    )
     template["title"] = title
     if authors:
         template["creators"] = authors
@@ -762,7 +789,9 @@ async def _add_by_arxiv(arxiv_id, collections, tags, write_zot, ctx):
     if coll_keys:
         template["collections"] = coll_keys
 
-    result = await _client.run_zotero_call(write_zot.create_items, [template], operation="write_zot.create_items(arxiv)")
+    result = await _client.run_zotero_call(
+        write_zot.create_items, [template], operation="write_zot.create_items(arxiv)"
+    )
     if isinstance(result, dict) and result.get("success"):
         item_key = next(iter(result["success"].values()))
 
@@ -964,7 +993,9 @@ async def add_by_isbn(
             return f"ISBN not found on Open Library or Google Books: {normalized}"
 
         # Build Zotero book item
-        template = await _client.run_zotero_call(write_zot.item_template, "book", operation="write_zot.item_template(book)")
+        template = await _client.run_zotero_call(
+            write_zot.item_template, "book", operation="write_zot.item_template(book)"
+        )
         item_data = dict(template)
         if meta.get("title"):
             item_data["title"] = meta["title"]
@@ -990,7 +1021,9 @@ async def add_by_isbn(
         if coll_keys:
             item_data["collections"] = coll_keys
 
-        result = await _client.run_zotero_call(write_zot.create_items, [item_data], operation="write_zot.create_items(isbn)")
+        result = await _client.run_zotero_call(
+            write_zot.create_items, [item_data], operation="write_zot.create_items(isbn)"
+        )
         if isinstance(result, dict) and result.get("success"):
             item_key = next(iter(result["success"].values()))
             return (
@@ -1128,7 +1161,9 @@ async def update_item(
             old_item_type = data.get("itemType", "")
             if old_item_type != item_type:
                 try:
-                    new_template = await _client.run_zotero_call(write_zot.item_template, item_type, operation=f"write_zot.item_template({item_type})")
+                    new_template = await _client.run_zotero_call(
+                        write_zot.item_template, item_type, operation=f"write_zot.item_template({item_type})"
+                    )
                 except Exception as e:
                     return f"Error: invalid item_type '{item_type}': {e}"
 
@@ -1250,7 +1285,9 @@ async def update_item(
         if not changes:
             return "No changes to apply." + skip_warning
 
-        resp = await _client.run_zotero_call(write_zot.update_item, item, operation=f"write_zot.update_item({item_key})")
+        resp = await _client.run_zotero_call(
+            write_zot.update_item, item, operation=f"write_zot.update_item({item_key})"
+        )
         if await _helpers._handle_write_response(resp, ctx):
             from zotero_mcp.cache import get_item_cache
 
@@ -1390,12 +1427,17 @@ async def find_duplicates(
         while True:
             if collection_key:
                 batch = await _client.run_zotero_call(
-                    zot.collection_items, collection_key, start=start, limit=page_size,
+                    zot.collection_items,
+                    collection_key,
+                    start=start,
+                    limit=page_size,
                     operation=f"zot.collection_items({collection_key}, start={start})",
                 )
             else:
                 batch = await _client.run_zotero_call(
-                    zot.items, start=start, limit=page_size,
+                    zot.items,
+                    start=start,
+                    limit=page_size,
                     operation=f"zot.items(duplicates, start={start})",
                 )
             if not batch:
@@ -1527,7 +1569,9 @@ async def merge_duplicates(
 
         # Fetch all items and children
         keeper = await _client.run_zotero_call(write_zot.item, keeper_key, operation=f"write_zot.item({keeper_key})")
-        keeper_children = await _client.run_zotero_call(write_zot.children, keeper_key, operation=f"write_zot.children({keeper_key})")
+        keeper_children = await _client.run_zotero_call(
+            write_zot.children, keeper_key, operation=f"write_zot.children({keeper_key})"
+        )
         duplicates = []
         for dk in dup_keys:
             dup_item = await _client.run_zotero_call(write_zot.item, dk, operation=f"write_zot.item({dk})")
@@ -1608,17 +1652,25 @@ async def merge_duplicates(
             keeper_data = keeper.get("data", {})
             existing_tags = [t.get("tag", "") for t in keeper_data.get("tags", [])]
             keeper_data["tags"] = [{"tag": t} for t in sorted(set(existing_tags) | all_tags)]
-            resp = await _client.run_zotero_call(write_zot.update_item, keeper, operation=f"write_zot.update_item({keeper_key})")
+            resp = await _client.run_zotero_call(
+                write_zot.update_item, keeper, operation=f"write_zot.update_item({keeper_key})"
+            )
             if not await _helpers._handle_write_response(resp, ctx):
                 return "Error: Failed to merge tags into keeper."
-            keeper = await _client.run_zotero_call(write_zot.item, keeper_key, operation=f"write_zot.item({keeper_key})")  # re-fetch for version
+            keeper = await _client.run_zotero_call(
+                write_zot.item, keeper_key, operation=f"write_zot.item({keeper_key})"
+            )  # re-fetch for version
 
         # Step 4: Consolidate collections
         for coll_key in new_collections:
-            resp = await _client.run_zotero_call(write_zot.addto_collection, coll_key, keeper, operation=f"write_zot.addto_collection({coll_key})")
+            resp = await _client.run_zotero_call(
+                write_zot.addto_collection, coll_key, keeper, operation=f"write_zot.addto_collection({coll_key})"
+            )
             if not await _helpers._handle_write_response(resp, ctx):
                 await ctx.warning(f"Failed to add keeper to collection {coll_key}")
-            keeper = await _client.run_zotero_call(write_zot.item, keeper_key, operation=f"write_zot.item({keeper_key})")  # re-fetch for version
+            keeper = await _client.run_zotero_call(
+                write_zot.item, keeper_key, operation=f"write_zot.item({keeper_key})"
+            )  # re-fetch for version
 
         # Step 5: Re-parent children (skip duplicate attachments)
         moved = []
@@ -1628,7 +1680,9 @@ async def merge_duplicates(
             for child in dup["children"]:
                 child_key = child.get("key", "?")
                 try:
-                    fresh_child = await _client.run_zotero_call(write_zot.item, child_key, operation=f"write_zot.item({child_key})")
+                    fresh_child = await _client.run_zotero_call(
+                        write_zot.item, child_key, operation=f"write_zot.item({child_key})"
+                    )
                     # Skip duplicate attachments — keeper already has this one
                     child_data = fresh_child.get("data", {})
                     if child_data.get("itemType") == "attachment":
@@ -1642,7 +1696,9 @@ async def merge_duplicates(
                             skipped_dupes.append(child_key)
                             continue  # Skip — keeper already has this attachment
                     fresh_child.get("data", {})["parentItem"] = keeper_key
-                    resp = await _client.run_zotero_call(write_zot.update_item, fresh_child, operation=f"write_zot.update_item({child_key})")
+                    resp = await _client.run_zotero_call(
+                        write_zot.update_item, fresh_child, operation=f"write_zot.update_item({child_key})"
+                    )
                     if await _helpers._handle_write_response(resp, ctx):
                         moved.append(child_key)
                     else:
@@ -1665,7 +1721,9 @@ async def merge_duplicates(
         for dup in duplicates:
             dup_key = dup["item"]["key"]
             try:
-                dup_item = await _client.run_zotero_call(write_zot.item, dup_key, operation=f"write_zot.item({dup_key})")
+                dup_item = await _client.run_zotero_call(
+                    write_zot.item, dup_key, operation=f"write_zot.item({dup_key})"
+                )
                 version = dup_item["version"]
                 from pyzotero.zotero import build_url
 
@@ -1753,7 +1811,9 @@ async def get_pdf_outline(item_key: str, *, ctx: Context) -> str:
 
         # Download PDF (works for both local/WebDAV/web storage)
         with tempfile.TemporaryDirectory() as tmpdir:
-            await _client.run_zotero_call(zot.dump, attachment_key, filename=filename, path=tmpdir, operation=f"zot.dump({attachment_key})")
+            await _client.run_zotero_call(
+                zot.dump, attachment_key, filename=filename, path=tmpdir, operation=f"zot.dump({attachment_key})"
+            )
             pdf_path = os.path.join(tmpdir, filename)
             if not os.path.exists(pdf_path) or os.path.getsize(pdf_path) == 0:
                 return f"Could not download PDF for attachment `{attachment_key}`."
@@ -1884,7 +1944,9 @@ async def add_from_file(
                 return f"DOI lookup succeeded but couldn't extract item key.\n\n{result_msg}"
         else:
             # Create a basic item
-            template = await _client.run_zotero_call(write_zot.item_template, item_type, operation=f"write_zot.item_template({item_type})")
+            template = await _client.run_zotero_call(
+                write_zot.item_template, item_type, operation=f"write_zot.item_template({item_type})"
+            )
             template["title"] = title or os.path.basename(file_path)
 
             tag_list = _helpers._normalize_str_list_input(tags, "tags")
@@ -1894,7 +1956,9 @@ async def add_from_file(
             if coll_keys:
                 template["collections"] = coll_keys
 
-            result = await _client.run_zotero_call(write_zot.create_items, [template], operation="write_zot.create_items(from_file)")
+            result = await _client.run_zotero_call(
+                write_zot.create_items, [template], operation="write_zot.create_items(from_file)"
+            )
             if isinstance(result, dict) and result.get("success"):
                 parent_key = next(iter(result["success"].values()))
             else:
@@ -2043,7 +2107,10 @@ async def rename_tag(
 
         limit = _helpers._normalize_limit(limit, default=100, max_val=500)
         items = await _client.run_zotero_call(
-            _helpers._paginate, read_zot.items, tag=old_tag, max_items=limit,
+            _helpers._paginate,
+            read_zot.items,
+            tag=old_tag,
+            max_items=limit,
             operation=f"paginate(zot.items, tag={old_tag})",
         )
 
@@ -2067,7 +2134,9 @@ async def rename_tag(
             item["data"] = data
 
             try:
-                response = await _client.run_zotero_call(write_zot.update_item, item, operation=f"zot.update_item({item.get('key', '')})")
+                response = await _client.run_zotero_call(
+                    write_zot.update_item, item, operation=f"zot.update_item({item.get('key', '')})"
+                )
                 if await _helpers._handle_write_response(response, ctx):
                     updated += 1
                     from zotero_mcp.cache import get_item_cache
@@ -2129,8 +2198,8 @@ async def relate_items(item_key: str, related_key: str, *, ctx: Context) -> str:
             return f"Item not found: {related_key}"
 
         # Add relations bidirectionally
-        lib_type = zot.library_type if hasattr(zot, 'library_type') else "users"
-        lib_id = zot.library_id if hasattr(zot, 'library_id') else "0"
+        lib_type = zot.library_type if hasattr(zot, "library_type") else "users"
+        lib_id = zot.library_id if hasattr(zot, "library_id") else "0"
         # pyzotero uses plural "users"/"groups" but Zotero URIs use singular
         uri_lib_type = lib_type.rstrip("s") if lib_type.endswith("s") else lib_type
         uri1 = f"http://zotero.org/{uri_lib_type}/{lib_id}/items/{item_key}"
@@ -2211,8 +2280,8 @@ async def unrelate_items(item_key: str, related_key: str, *, ctx: Context) -> st
         if not item2:
             return f"Item not found: {related_key}"
 
-        lib_type = zot.library_type if hasattr(zot, 'library_type') else "users"
-        lib_id = zot.library_id if hasattr(zot, 'library_id') else "0"
+        lib_type = zot.library_type if hasattr(zot, "library_type") else "users"
+        lib_id = zot.library_id if hasattr(zot, "library_id") else "0"
         uri_lib_type = lib_type.rstrip("s") if lib_type.endswith("s") else lib_type
         uri1 = f"http://zotero.org/{uri_lib_type}/{lib_id}/items/{item_key}"
         uri2 = f"http://zotero.org/{uri_lib_type}/{lib_id}/items/{related_key}"
@@ -2285,7 +2354,9 @@ async def batch_delete_items(item_keys: str, *, ctx: Context) -> str:
         from pyzotero.zotero import build_url
 
         # Get current versions for all items
-        items = await _client.run_zotero_call(write_zot.item, ",".join(keys), operation=f"write_zot.item(batch:{len(keys)})")
+        items = await _client.run_zotero_call(
+            write_zot.item, ",".join(keys), operation=f"write_zot.item(batch:{len(keys)})"
+        )
         if not items:
             return f"No items found for keys: {','.join(keys)}"
 
@@ -2380,16 +2451,20 @@ async def create_saved_search(
             value = cond.get("value", "")
             if not condition:
                 return f"Error: Condition missing 'condition' field: {cond}"
-            search_data["conditions"].append({
-                "condition": condition,
-                "operator": operator,
-                "value": value,
-                "required": join_mode,
-            })
+            search_data["conditions"].append(
+                {
+                    "condition": condition,
+                    "operator": operator,
+                    "value": value,
+                    "required": join_mode,
+                }
+            )
 
         # Create via API
         try:
-            resp = await _client.run_zotero_call(write_zot.create_saved_search, search_data, operation="write_zot.create_saved_search")
+            resp = await _client.run_zotero_call(
+                write_zot.create_saved_search, search_data, operation="write_zot.create_saved_search"
+            )
             if resp and isinstance(resp, dict) and "success" in resp:
                 key = resp["success"].get("0", "")
                 if key:
@@ -2401,8 +2476,8 @@ async def create_saved_search(
             # Fallback: try direct API call
             import requests as _requests
 
-            lib_type = write_zot.library_type if hasattr(write_zot, 'library_type') else "users"
-            lib_id = write_zot.library_id if hasattr(write_zot, 'library_id') else "0"
+            lib_type = write_zot.library_type if hasattr(write_zot, "library_type") else "users"
+            lib_id = write_zot.library_id if hasattr(write_zot, "library_id") else "0"
             if _utils.is_local_mode():
                 base_url = f"http://localhost:23119/api/{lib_type}/{lib_id}"
             else:
@@ -2512,13 +2587,17 @@ async def rename_collection(collection_key: str, new_name: str, *, ctx: Context)
 
         # Get the collection
         try:
-            collection = await _client.run_zotero_call(write_zot.collection, collection_key, operation=f"write_zot.collection({collection_key})")
+            collection = await _client.run_zotero_call(
+                write_zot.collection, collection_key, operation=f"write_zot.collection({collection_key})"
+            )
         except Exception:
             return f"Error: Collection not found: {collection_key}"
 
         # Update the name
         collection["data"]["name"] = new_name.strip()
-        resp = await _client.run_zotero_call(write_zot.update_collection, collection, operation=f"write_zot.update_collection({collection_key})")
+        resp = await _client.run_zotero_call(
+            write_zot.update_collection, collection, operation=f"write_zot.update_collection({collection_key})"
+        )
         if await _helpers._handle_write_response(resp, ctx):
             await _helpers._notify_library_changed(ctx)
             return f"Renamed collection to '{new_name.strip()}' (key: {collection_key})"
@@ -2557,15 +2636,19 @@ async def delete_collection(collection_key: str, *, ctx: Context) -> str:
 
         # Get the collection to check version
         try:
-            collection = await _client.run_zotero_call(write_zot.collection, collection_key, operation=f"write_zot.collection({collection_key})")
+            collection = await _client.run_zotero_call(
+                write_zot.collection, collection_key, operation=f"write_zot.collection({collection_key})"
+            )
             name = collection["data"].get("name", "Unnamed")
         except Exception:
             return f"Error: Collection not found: {collection_key}"
 
         # Delete the collection
         try:
-            resp = await _client.run_zotero_call(write_zot.delete_collection, collection, operation=f"write_zot.delete_collection({collection_key})")
-            if resp and hasattr(resp, 'status_code') and resp.status_code in (200, 204):
+            resp = await _client.run_zotero_call(
+                write_zot.delete_collection, collection, operation=f"write_zot.delete_collection({collection_key})"
+            )
+            if resp and hasattr(resp, "status_code") and resp.status_code in (200, 204):
                 await _helpers._notify_library_changed(ctx)
                 return f"Deleted collection '{name}' (key: {collection_key}). Items were preserved."
             return f"Failed to delete collection: {resp}"
@@ -2617,6 +2700,7 @@ async def merge_tags(source_tags: str, target_tag: str, *, ctx: Context) -> str:
                 if "Renamed" in result or "renamed" in result:
                     # Extract count from result
                     import re as _re
+
                     match = _re.search(r"(\d+)", result)
                     if match:
                         total_renamed += int(match.group(1))
@@ -2664,10 +2748,7 @@ async def delete_saved_search(search_name: str, *, ctx: Context) -> str:
                 break
         if not match:
             names = [s["name"] for s in searches]
-            return (
-                f"No saved search named '{search_name}'. "
-                f"Available: {', '.join(names) if names else 'none'}"
-            )
+            return f"No saved search named '{search_name}'. Available: {', '.join(names) if names else 'none'}"
 
         # Try to delete via API
         try:
@@ -2685,7 +2766,9 @@ async def delete_saved_search(search_name: str, *, ctx: Context) -> str:
                 return f"Deleted saved search '{match['name']}' (key: {search_key})"
             return f"Failed to delete saved search (HTTP {resp.status_code}): {resp.text[:200]}"
         except ValueError:
-            return "Error: Web API client required for deleting saved searches. Set ZOTERO_API_KEY and ZOTERO_LIBRARY_ID."
+            return (
+                "Error: Web API client required for deleting saved searches. Set ZOTERO_API_KEY and ZOTERO_LIBRARY_ID."
+            )
 
     except Exception as e:
         await ctx.error(f"Error deleting saved search: {str(e)}")
@@ -2890,14 +2973,16 @@ async def _search_semantic_scholar(query: str, limit: int) -> list[dict]:
     for paper in data.get("data", []):
         doi = paper.get("externalIds", {}).get("DOI")
         authors = [a.get("name", "") for a in paper.get("authors", [])]
-        results.append({
-            "title": paper.get("title"),
-            "doi": doi,
-            "authors": authors,
-            "year": paper.get("year"),
-            "venue": paper.get("venue"),
-            "source": "Semantic Scholar",
-        })
+        results.append(
+            {
+                "title": paper.get("title"),
+                "doi": doi,
+                "authors": authors,
+                "year": paper.get("year"),
+                "venue": paper.get("venue"),
+                "source": "Semantic Scholar",
+            }
+        )
 
     return results
 
@@ -2937,13 +3022,15 @@ async def _search_openalex(query: str, limit: int) -> list[dict]:
         if primary_loc and primary_loc.get("source"):
             venue = primary_loc["source"].get("display_name")
 
-        results.append({
-            "title": work.get("title"),
-            "doi": doi,
-            "authors": authors,
-            "year": work.get("publication_year"),
-            "venue": venue,
-            "source": "OpenAlex",
-        })
+        results.append(
+            {
+                "title": work.get("title"),
+                "doi": doi,
+                "authors": authors,
+                "year": work.get("publication_year"),
+                "venue": venue,
+                "source": "OpenAlex",
+            }
+        )
 
     return results

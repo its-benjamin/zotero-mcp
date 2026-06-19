@@ -2,6 +2,7 @@
 Zotero client wrapper for MCP server.
 """
 
+import asyncio
 import functools
 import os
 import threading
@@ -68,6 +69,7 @@ def with_zotero_api_lock(func):
     nested decorated calls on the same thread (e.g. add_by_url -> add_by_doi)
     acquire instantly and are never blocked by this bound.
     """
+
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         timeout = _lock_timeout()
@@ -88,7 +90,42 @@ def with_zotero_api_lock(func):
             return func(*args, **kwargs)
         finally:
             _zotero_api_lock.release()
+
     return wrapper
+
+
+DEFAULT_ZOTERO_CALL_TIMEOUT_SECONDS = 30.0
+
+
+class ZoteroAPITimeout(TimeoutError):
+    """Raised when a blocking Zotero API call exceeds the configured budget."""
+
+
+def get_zotero_call_timeout_seconds() -> float:
+    """Return per-call Zotero API timeout in seconds."""
+    raw = os.getenv("ZOTERO_MCP_CALL_TIMEOUT_SECONDS", "")
+    if not raw:
+        return DEFAULT_ZOTERO_CALL_TIMEOUT_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_ZOTERO_CALL_TIMEOUT_SECONDS
+    if value <= 0:
+        return DEFAULT_ZOTERO_CALL_TIMEOUT_SECONDS
+    return value
+
+
+async def run_zotero_call(func, /, *args, timeout: float | None = None, operation: str | None = None, **kwargs) -> Any:
+    """Run a blocking Zotero API call with a bounded async wait."""
+    effective_timeout = timeout if timeout is not None else get_zotero_call_timeout_seconds()
+    call_name = operation or getattr(func, "__name__", repr(func))
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(func, *args, **kwargs), timeout=effective_timeout)
+    except TimeoutError as exc:
+        raise ZoteroAPITimeout(
+            f"Zotero API call timed out after {effective_timeout:g}s: {call_name}. "
+            "Zotero Desktop may be busy or its local API may be stalled."
+        ) from exc
 
 
 # Runtime library override state — set by zotero_switch_library tool.
@@ -378,6 +415,7 @@ def generate_bibtex(item: dict[str, Any]) -> str:
     # Try Better BibTeX first
     try:
         from zotero_mcp.better_bibtex_client import ZoteroBetterBibTexAPI
+
         bibtex = ZoteroBetterBibTexAPI()
 
         if bibtex.is_zotero_running():
@@ -402,7 +440,7 @@ def generate_bibtex(item: dict[str, Any]) -> str:
         "thesis": "phdthesis",
         "report": "techreport",
         "webpage": "misc",
-        "manuscript": "unpublished"
+        "manuscript": "unpublished",
     }
 
     # Create citation key
@@ -431,14 +469,14 @@ def generate_bibtex(item: dict[str, Any]) -> str:
         ("place", "address"),
         ("DOI", "doi"),
         ("url", "url"),
-        ("abstractNote", "abstract")
+        ("abstractNote", "abstract"),
     ]
 
     for zotero_field, bibtex_field in field_mappings:
         if value := data.get(zotero_field):
             # Escape special characters
             value = value.replace("{", "\\{").replace("}", "\\}")
-            lines.append(f'  {bibtex_field} = {{{value}}},')
+            lines.append(f"  {bibtex_field} = {{{value}}},")
 
     # Add authors
     if creators:
@@ -450,23 +488,21 @@ def generate_bibtex(item: dict[str, Any]) -> str:
                 elif "name" in creator:
                     authors.append(creator["name"])
         if authors:
-            lines.append(f'  author = {{{" and ".join(authors)}}},')
+            lines.append(f"  author = {{{' and '.join(authors)}}},")
 
     # Add year
     if year != "nodate":
-        lines.append(f'  year = {{{year}}},')
+        lines.append(f"  year = {{{year}}},")
 
     # Remove trailing comma from last field and close entry
-    if lines[-1].endswith(','):
+    if lines[-1].endswith(","):
         lines[-1] = lines[-1][:-1]
     lines.append("}")
 
     return "\n".join(lines)
 
 
-def get_attachment_details(
-    zot: zotero.Zotero, item: dict[str, Any]
-) -> AttachmentDetails | None:
+def get_attachment_details(zot: zotero.Zotero, item: dict[str, Any]) -> AttachmentDetails | None:
     """
     Get attachment details for a Zotero item, finding the most relevant attachment.
 

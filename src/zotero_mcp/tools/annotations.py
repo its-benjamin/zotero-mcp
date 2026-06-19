@@ -258,7 +258,9 @@ async def get_annotations(
                     # Ensure PDF annotation tool is installed
                     if ensure_pdfannots_installed():
                         # Get PDF attachments via the resolved parent key
-                        children = await _client.run_zotero_call(zot.children, parent_item_key, operation=f"zot.children({parent_item_key})")
+                        children = await _client.run_zotero_call(
+                            zot.children, parent_item_key, operation=f"zot.children({parent_item_key})"
+                        )
                         pdf_attachments = [
                             item for item in children if item.get("data", {}).get("contentType") == "application/pdf"
                         ]
@@ -562,7 +564,9 @@ async def _batch_resolve_parent_titles(zot, parent_keys: set[str], ctx: Context)
     for i in range(0, len(keys_list), BATCH_SIZE):
         batch = keys_list[i : i + BATCH_SIZE]
         try:
-            items = await _client.run_zotero_call(zot.items, itemKey=",".join(batch), operation=f"zot.items(batch:{len(batch)})")
+            items = await _client.run_zotero_call(
+                zot.items, itemKey=",".join(batch), operation=f"zot.items(batch:{len(batch)})"
+            )
             for item in items:
                 titles[item.get("key", "")] = item.get("data", {}).get("title", "Untitled")
         except Exception as e:
@@ -601,7 +605,9 @@ async def _batch_resolve_grandparent_titles(zot, parent_keys: set[str], ctx: Con
     for i in range(0, len(keys_list), BATCH_SIZE):
         batch = keys_list[i : i + BATCH_SIZE]
         try:
-            items = await _client.run_zotero_call(zot.items, itemKey=",".join(batch), operation=f"zot.items(attachment batch:{len(batch)})")
+            items = await _client.run_zotero_call(
+                zot.items, itemKey=",".join(batch), operation=f"zot.items(attachment batch:{len(batch)})"
+            )
             for item in items:
                 key = item.get("key", "")
                 attachment_data[key] = item
@@ -630,7 +636,9 @@ async def _batch_resolve_grandparent_titles(zot, parent_keys: set[str], ctx: Con
     for i in range(0, len(gp_list), BATCH_SIZE):
         batch = gp_list[i : i + BATCH_SIZE]
         try:
-            items = await _client.run_zotero_call(zot.items, itemKey=",".join(batch), operation=f"zot.items(gp batch:{len(batch)})")
+            items = await _client.run_zotero_call(
+                zot.items, itemKey=",".join(batch), operation=f"zot.items(gp batch:{len(batch)})"
+            )
             for item in items:
                 grandparent_titles[item.get("key", "")] = item.get("data", {}).get("title", "Untitled")
         except Exception as e:
@@ -939,7 +947,9 @@ async def create_note(
                     raw_type = override.get("library_type")
                     if raw_type:
                         web_zot.library_type = raw_type if raw_type.endswith("s") else raw_type + "s"
-                result = await _client.run_zotero_call(web_zot.create_items, [note_data], operation="web_zot.create_items(note)")
+                result = await _client.run_zotero_call(
+                    web_zot.create_items, [note_data], operation="web_zot.create_items(note)"
+                )
                 if "success" in result and result["success"]:
                     successful = result["success"]
                     if len(successful) > 0:

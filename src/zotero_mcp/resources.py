@@ -83,9 +83,11 @@ async def recent_items() -> list[dict]:
     except Exception as e:
         raise ResourceError(f"Could not fetch recent items: {e}") from e
 
+
 # ---------------------------------------------------------------------------
 # Resource templates (parameterized URIs)
 # ---------------------------------------------------------------------------
+
 
 @mcp.resource(
     "zotero://item/{item_key}",
@@ -154,6 +156,7 @@ async def item_children_resource(item_key: str) -> list[dict]:
     except Exception as e:
         raise ResourceError(f"Could not fetch children for {item_key}: {e}") from e
 
+
 @mcp.resource(
     "zotero://collection/{collection_key}/items",
     name="zotero_collection_items",
@@ -182,6 +185,7 @@ async def collection_items_resource(collection_key: str) -> list[dict]:
         ]
     except Exception as e:
         raise ResourceError(f"Could not fetch items for collection {collection_key}: {e}") from e
+
 
 @mcp.resource(
     "zotero://tag/{tag_name}/items",
@@ -231,7 +235,7 @@ async def library_stats() -> dict:
         from collections import Counter
 
         type_counter: Counter[str] = Counter()
-        for item in (items or []):
+        for item in items or []:
             type_counter[item.get("data", {}).get("itemType", "unknown")] += 1
 
         # Get collection and tag counts
@@ -287,7 +291,9 @@ async def recently_modified() -> list[dict]:
         zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
 
         def _fetch():
-            zot.add_parameters(limit=10, sort="dateModified", direction="desc", itemType="-attachment -note -annotation")
+            zot.add_parameters(
+                limit=10, sort="dateModified", direction="desc", itemType="-attachment -note -annotation"
+            )
             return zot.items()
 
         items = await _client.run_zotero_call(_fetch, operation="zot.items(recently_modified)")

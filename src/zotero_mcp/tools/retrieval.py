@@ -221,8 +221,7 @@ async def get_item_fulltext(item_key: str, *, ctx: Context) -> str:
                                     (
                                         att["key"]
                                         for att in attachments
-                                        if att.get("exists")
-                                        and (att.get("content_type") or "").startswith("text/html")
+                                        if att.get("exists") and (att.get("content_type") or "").startswith("text/html")
                                     ),
                                     None,
                                 )
@@ -328,6 +327,7 @@ class _ResolvedPdfAttachment:
         if self.temp_dir:
             shutil.rmtree(self.temp_dir, ignore_errors=True)
 
+
 def _parse_pdf_page_spec(pages: str, page_count: int, *, max_pages: int) -> list[int]:
     """Parse a 1-indexed page spec into sorted unique 0-indexed page numbers."""
     if page_count < 1:
@@ -365,6 +365,7 @@ def _parse_pdf_page_spec(pages: str, page_count: int, *, max_pages: int) -> list
         raise ValueError(f"Page {too_high[0]} is outside PDF page count ({page_count}).")
     return [page - 1 for page in sorted(selected)]
 
+
 def _local_pdf_attachment_for_key(item_key: str) -> _ResolvedPdfAttachment | None:
     if not _utils.is_local_mode():
         return None
@@ -393,6 +394,7 @@ def _local_pdf_attachment_for_key(item_key: str) -> _ResolvedPdfAttachment | Non
         )
     return None
 
+
 async def _resolve_pdf_attachment(item_key: str, ctx: Context) -> _ResolvedPdfAttachment:
     """Resolve a parent item key or PDF attachment key to a local PDF path."""
     try:
@@ -415,7 +417,9 @@ async def _resolve_pdf_attachment(item_key: str, ctx: Context) -> _ResolvedPdfAt
     else:
         parent_key = item_key
         children = await _client.run_zotero_call(zot.children, item_key, operation=f"zot.children({item_key})")
-        attachment = next((child for child in children if child.get("data", {}).get("contentType") == "application/pdf"), None)
+        attachment = next(
+            (child for child in children if child.get("data", {}).get("contentType") == "application/pdf"), None
+        )
         if not attachment:
             raise ValueError(f"No PDF attachment found for item `{item_key}`.")
 
@@ -445,6 +449,7 @@ async def _resolve_pdf_attachment(item_key: str, ctx: Context) -> _ResolvedPdfAt
         temp_dir=temp_dir,
     )
 
+
 def _pdf_page_count(pdf_path: Path) -> int:
     try:
         import fitz
@@ -457,8 +462,10 @@ def _pdf_page_count(pdf_path: Path) -> int:
     finally:
         doc.close()
 
+
 def _format_page_list(page_indexes: list[int]) -> str:
     return ", ".join(str(page + 1) for page in page_indexes)
+
 
 def _render_cache_root() -> Path:
     """Return OS-native cache root for rendered PDF page images."""
@@ -472,6 +479,7 @@ def _render_cache_root() -> Path:
     if base:
         return Path(base) / "zotero-mcp" / "rendered_pages"
     return Path.home() / ".cache" / "zotero-mcp" / "rendered_pages"
+
 
 def _cleanup_render_cache(root: Path, *, max_age_days: int = 30) -> None:
     """Best-effort removal of stale rendered page cache files."""
@@ -494,6 +502,7 @@ def _cleanup_render_cache(root: Path, *, max_age_days: int = 30) -> None:
                 continue
     except OSError:
         return
+
 
 @mcp.tool(
     name="zotero_extract_pdf_pages",
@@ -606,8 +615,8 @@ async def extract_pdf_pages(
             next_hint = "PaddleOCR auto-fallback was used because the primary backend returned little text."
         else:
             next_hint = (
-                f"retry scanned pages with OCR: `zotero_extract_pdf_pages(item_key=\"{resolved.attachment_key}\", "
-                f"pages=\"{pages}\", use_ocr=true)`."
+                f'retry scanned pages with OCR: `zotero_extract_pdf_pages(item_key="{resolved.attachment_key}", '
+                f'pages="{pages}", use_ocr=true)`.'
             )
         lines = [
             "# PDF Page Extraction",
@@ -623,7 +632,7 @@ async def extract_pdf_pages(
             f"- **Extracted Pages:** {page_list}",
             f"- **Page Count:** {page_count}",
             "- **Next:** "
-            f"render same pages for vision: `zotero_render_pdf_pages(item_key=\"{resolved.attachment_key}\", pages=\"{pages}\")`; "
+            f'render same pages for vision: `zotero_render_pdf_pages(item_key="{resolved.attachment_key}", pages="{pages}")`; '
             f"{next_hint}",
             "",
             "## Extracted Text",
@@ -639,6 +648,7 @@ async def extract_pdf_pages(
     finally:
         if resolved:
             resolved.cleanup()
+
 
 @mcp.tool(
     name="zotero_render_pdf_pages",
@@ -725,7 +735,7 @@ async def render_pdf_pages(
                 "",
                 "## Next",
                 "- **OCR Text:** "
-                f"`zotero_extract_pdf_pages(item_key=\"{resolved.attachment_key}\", pages=\"{pages}\", use_ocr=true)`",
+                f'`zotero_extract_pdf_pages(item_key="{resolved.attachment_key}", pages="{pages}", use_ocr=true)`',
             ]
         )
 
@@ -743,6 +753,7 @@ async def render_pdf_pages(
     finally:
         if resolved:
             resolved.cleanup()
+
 
 @mcp.tool(
     name="zotero_get_attachment_path",
@@ -792,7 +803,7 @@ async def get_attachment_path(item_key: str, *, ctx: Context) -> str:
                 next_parts.append("inspect this file directly with local filesystem tools")
             if att.get("content_type") == "application/pdf":
                 next_parts.append(f'outline: `zotero_get_pdf_outline(item_key="{att["key"]}")`')
-                next_parts.append(f'annotations: use attachment key `{att["key"]}`')
+                next_parts.append(f"annotations: use attachment key `{att['key']}`")
             lines.append(f"- **Next:** {'; '.join(next_parts) if next_parts else 'resolve or sync attachment first'}")
             lines.append("")
         return "\n".join(lines).rstrip()
@@ -929,6 +940,7 @@ def _clean_note_text(note_html: str, max_chars: int = 500) -> str:
 def _child_title(data: dict, fallback: str = "Untitled") -> str:
     return data.get("title") or data.get("filename") or fallback
 
+
 def _fulltext_source_block(
     item_key: str,
     source: str,
@@ -950,9 +962,9 @@ def _fulltext_source_block(
     if pdf_backend and not pdf_use_ocr:
         lines.append(
             "- **Next:** If text is empty or garbled, retry specific pages with "
-            f"`zotero_extract_pdf_pages(item_key=\"{attachment_key or item_key}\", pages=\"1-5\", use_ocr=true)` "
+            f'`zotero_extract_pdf_pages(item_key="{attachment_key or item_key}", pages="1-5", use_ocr=true)` '
             "or inspect page images with "
-            f"`zotero_render_pdf_pages(item_key=\"{attachment_key or item_key}\", pages=\"1\")` for a vision model. "
+            f'`zotero_render_pdf_pages(item_key="{attachment_key or item_key}", pages="1")` for a vision model. '
             "Config fallback: `semantic_search.extraction.pdf_use_ocr=true`."
         )
     return "\n".join(lines)
@@ -2311,8 +2323,8 @@ async def generate_bibliography(
             import requests as _requests
 
             # Build the request URL
-            lib_type = zot.library_type if hasattr(zot, 'library_type') else "users"
-            lib_id = zot.library_id if hasattr(zot, 'library_id') else "0"
+            lib_type = zot.library_type if hasattr(zot, "library_type") else "users"
+            lib_id = zot.library_id if hasattr(zot, "library_id") else "0"
             if _utils.is_local_mode():
                 base_url = f"http://localhost:23119/api/{lib_type}/{lib_id}"
             else:
@@ -2354,7 +2366,9 @@ async def generate_bibliography(
             output.append(_client.generate_bibtex(item))
             output.append("")
 
-        output.append("*Note: Generated using local BibTeX fallback. For formatted bibliography, ensure Zotero is running with the local API enabled.*")
+        output.append(
+            "*Note: Generated using local BibTeX fallback. For formatted bibliography, ensure Zotero is running with the local API enabled.*"
+        )
         return "\n".join(output)
 
     except Exception as e:
@@ -2394,7 +2408,21 @@ async def export_items(
             if err:
                 return f"Error: Invalid key '{k}': {err}"
 
-        valid_formats = {"bibtex", "biblatex", "ris", "csljson", "csv", "tei", "wikipedia", "mods", "rdf_dc", "rdf_zotero", "refer", "bookmarks", "coins"}
+        valid_formats = {
+            "bibtex",
+            "biblatex",
+            "ris",
+            "csljson",
+            "csv",
+            "tei",
+            "wikipedia",
+            "mods",
+            "rdf_dc",
+            "rdf_zotero",
+            "refer",
+            "bookmarks",
+            "coins",
+        }
         if format not in valid_formats:
             return f"Error: Unknown format '{format}'. Valid: {', '.join(sorted(valid_formats))}"
 
@@ -2407,8 +2435,8 @@ async def export_items(
         try:
             import requests as _requests
 
-            lib_type = zot.library_type if hasattr(zot, 'library_type') else "users"
-            lib_id = zot.library_id if hasattr(zot, 'library_id') else "0"
+            lib_type = zot.library_type if hasattr(zot, "library_type") else "users"
+            lib_id = zot.library_id if hasattr(zot, "library_id") else "0"
             if _utils.is_local_mode():
                 base_url = f"http://localhost:23119/api/{lib_type}/{lib_id}"
             else:
@@ -2572,19 +2600,41 @@ async def get_item_types(*, ctx: Context) -> str:
 
         # Fallback: use known item types
         known_types = [
-            ("book", "Book"), ("bookSection", "Book Section"), ("journalArticle", "Journal Article"),
-            ("magazineArticle", "Magazine Article"), ("newspaperArticle", "Newspaper Article"),
-            ("thesis", "Thesis"), ("conferencePaper", "Conference Paper"), ("patent", "Patent"),
-            ("report", "Report"), ("webpage", "Web Page"), ("attachment", "Attachment"),
-            ("note", "Note"), ("preprint", "Preprint"), ("dataset", "Dataset"),
-            ("standard", "Standard"), ("podcast", "Podcast"), ("presentation", "Presentation"),
-            ("videoRecording", "Video Recording"), ("audioRecording", "Audio Recording"),
-            ("bill", "Bill"), ("case", "Case"), ("hearing", "Hearing"),
-            ("statute", "Statute"), ("letter", "Letter"), ("manuscript", "Manuscript"),
-            ("interview", "Interview"), ("film", "Film"), ("artwork", "Artwork"),
-            ("map", "Map"), ("blogPost", "Blog Post"), ("forumPost", "Forum Post"),
-            ("instantMessage", "Instant Message"), ("email", "Email"),
-            ("encyclopediaArticle", "Encyclopedia Article"), ("dictionaryEntry", "Dictionary Entry"),
+            ("book", "Book"),
+            ("bookSection", "Book Section"),
+            ("journalArticle", "Journal Article"),
+            ("magazineArticle", "Magazine Article"),
+            ("newspaperArticle", "Newspaper Article"),
+            ("thesis", "Thesis"),
+            ("conferencePaper", "Conference Paper"),
+            ("patent", "Patent"),
+            ("report", "Report"),
+            ("webpage", "Web Page"),
+            ("attachment", "Attachment"),
+            ("note", "Note"),
+            ("preprint", "Preprint"),
+            ("dataset", "Dataset"),
+            ("standard", "Standard"),
+            ("podcast", "Podcast"),
+            ("presentation", "Presentation"),
+            ("videoRecording", "Video Recording"),
+            ("audioRecording", "Audio Recording"),
+            ("bill", "Bill"),
+            ("case", "Case"),
+            ("hearing", "Hearing"),
+            ("statute", "Statute"),
+            ("letter", "Letter"),
+            ("manuscript", "Manuscript"),
+            ("interview", "Interview"),
+            ("film", "Film"),
+            ("artwork", "Artwork"),
+            ("map", "Map"),
+            ("blogPost", "Blog Post"),
+            ("forumPost", "Forum Post"),
+            ("instantMessage", "Instant Message"),
+            ("email", "Email"),
+            ("encyclopediaArticle", "Encyclopedia Article"),
+            ("dictionaryEntry", "Dictionary Entry"),
         ]
         output = [f"# Zotero Item Types ({len(known_types)})", ""]
         for itype, name in known_types:
@@ -2709,7 +2759,11 @@ async def get_library_changes(
 
         # Get changed items
         items = await _client.run_zotero_call(
-            zot.items, since=since_version, limit=limit, sort="dateModified", direction="desc",
+            zot.items,
+            since=since_version,
+            limit=limit,
+            sort="dateModified",
+            direction="desc",
             operation=f"zot.items(changes since={since_version})",
         )
 
@@ -2753,7 +2807,10 @@ async def get_publications(limit: int | str = 25, *, ctx: Context) -> str:
         limit = _helpers._normalize_limit(limit, default=25)
 
         items = await _client.run_zotero_call(
-            zot.publications, limit=limit, sort="dateAdded", direction="desc",
+            zot.publications,
+            limit=limit,
+            sort="dateAdded",
+            direction="desc",
             operation="zot.publications",
         )
 

@@ -55,13 +55,10 @@ from zotero_mcp.tools.annotations import (  # noqa: F401
     create_annotation,
     create_area_annotation,
     create_note,
-    delete_annotation,
     delete_note,
     get_annotations,
     get_notes,
-    get_page_layout,
     search_notes,
-    update_annotation,
     update_note,
 )
 from zotero_mcp.tools.connectors import (  # noqa: F401
@@ -78,7 +75,6 @@ from zotero_mcp.tools.retrieval import (  # noqa: F401
     get_item_children,
     get_item_fulltext,
     get_item_metadata,
-    get_item_related,
     get_items_children,
     get_recent,
     get_tags,
@@ -99,13 +95,10 @@ from zotero_mcp.tools.search import (  # noqa: F401
     update_search_database,
 )
 from zotero_mcp.tools.write import (  # noqa: F401
-    add_by_bibtex,
-    add_by_csl_json,
     add_by_doi,
     add_by_isbn,
     add_by_url,
     add_from_file,
-    add_item_relation,
     batch_update_tags,
     create_collection,
     delete_collection,
@@ -114,7 +107,6 @@ from zotero_mcp.tools.write import (  # noqa: F401
     get_pdf_outline,
     manage_collections,
     merge_duplicates,
-    remove_item_relation,
     search_collections,
     search_papers,
     update_item,

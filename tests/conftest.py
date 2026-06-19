@@ -1,13 +1,6 @@
 """Shared test fixtures for Zotero MCP tests."""
 
-import os
 import pytest
-
-# Marker for tests that use tmp_path and fail on GitHub Actions
-skip_on_ci = pytest.mark.skipif(
-    os.environ.get("CI") == "true",
-    reason="tmp_path fixture unreliable on GitHub Actions"
-)
 
 
 @pytest.fixture(autouse=True)
@@ -18,20 +11,35 @@ def _clear_runtime_caches():
     from zotero_mcp.tools import search as _search_mod
     _search_mod._search_cache.clear()
 
-    # Client singleton cache
-    from zotero_mcp import client as _client_mod
-    _client_mod.clear_client_cache()
-
-    # TTL caches (item, children, collections, tags, annotations)
+    # TTL caches
     from zotero_mcp.cache import invalidate_all_caches
     invalidate_all_caches()
+
+    # Helpers function cache
+    from zotero_mcp.tools import _helpers as _helpers_mod
+    if hasattr(_helpers_mod._resolve_collection_names, "_cache"):
+        _helpers_mod._resolve_collection_names._cache.clear()
 
     yield
 
     # Post-test cleanup
     _search_mod._search_cache.clear()
-    _client_mod.clear_client_cache()
     invalidate_all_caches()
+    if hasattr(_helpers_mod._resolve_collection_names, "_cache"):
+        _helpers_mod._resolve_collection_names._cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _mock_zotero_not_running(monkeypatch):
+    """Ensure tests don't attempt to connect to a live local Zotero instance."""
+    try:
+        from zotero_mcp.better_bibtex_client import ZoteroBetterBibTexAPI
+        monkeypatch.setattr(ZoteroBetterBibTexAPI, "is_zotero_running", lambda self: False)
+    except ImportError:
+        pass
+
+
+
 
 
 class DummyContext:

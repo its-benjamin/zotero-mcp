@@ -45,9 +45,7 @@ def is_webdav_configured() -> bool:
     return get_webdav_config() is not None
 
 
-def _select_primary_member(
-    members: list[zipfile.ZipInfo], expected_filename: str | None
-) -> zipfile.ZipInfo:
+def _select_primary_member(members: list[zipfile.ZipInfo], expected_filename: str | None) -> zipfile.ZipInfo:
     """Pick the most likely primary file from a Zotero WebDAV archive."""
     expected_basename = Path(expected_filename).name.lower() if expected_filename else ""
     expected_suffix = Path(expected_filename).suffix.lower() if expected_filename else ""
@@ -133,12 +131,7 @@ def _build_prop_xml(md5_hex: str, mtime_ms: int) -> bytes:
     Zotero stores a tiny XML doc next to each <KEY>.zip with mtime and
     md5 so other clients can detect changes without downloading the zip.
     """
-    return (
-        '<properties version="1">'
-        f"<mtime>{int(mtime_ms)}</mtime>"
-        f"<hash>{md5_hex}</hash>"
-        "</properties>"
-    ).encode()
+    return (f'<properties version="1"><mtime>{int(mtime_ms)}</mtime><hash>{md5_hex}</hash></properties>').encode()
 
 
 def upload_attachment_to_webdav(
@@ -163,9 +156,7 @@ def upload_attachment_to_webdav(
     """
     config = get_webdav_config()
     if not config:
-        raise WebDAVNotConfiguredError(
-            "Missing ZOTERO_WEBDAV_URL / ZOTERO_WEBDAV_USERNAME / ZOTERO_WEBDAV_PASSWORD"
-        )
+        raise WebDAVNotConfiguredError("Missing ZOTERO_WEBDAV_URL / ZOTERO_WEBDAV_USERNAME / ZOTERO_WEBDAV_PASSWORD")
 
     base_url, username, password = config
     src = Path(file_path)
@@ -219,9 +210,7 @@ def download_attachment_from_webdav(
     """Download a WebDAV-backed Zotero attachment and return the primary file path."""
     config = get_webdav_config()
     if not config:
-        raise WebDAVNotConfiguredError(
-            "Missing ZOTERO_WEBDAV_URL / ZOTERO_WEBDAV_USERNAME / ZOTERO_WEBDAV_PASSWORD"
-        )
+        raise WebDAVNotConfiguredError("Missing ZOTERO_WEBDAV_URL / ZOTERO_WEBDAV_USERNAME / ZOTERO_WEBDAV_PASSWORD")
 
     base_url, username, password = config
     url = f"{base_url}{quote(attachment_key, safe='')}.zip"

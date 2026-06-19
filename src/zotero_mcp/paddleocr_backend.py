@@ -130,9 +130,7 @@ def extract_text_from_pdf_paddleocr(
         finally:
             doc.close()
     except ImportError:
-        logger.warning(
-            "PaddleOCR not installed. Install with: pip install paddlepaddle paddleocr"
-        )
+        logger.warning("PaddleOCR not installed. Install with: pip install paddlepaddle paddleocr")
         return ""
     except Exception as e:
         logger.warning(f"PaddleOCR PDF extraction failed: {file_path.name}: {e}")
@@ -179,9 +177,7 @@ def extract_pages_paddleocr(
         finally:
             doc.close()
     except ImportError:
-        logger.warning(
-            "PaddleOCR not installed. Install with: pip install paddlepaddle paddleocr"
-        )
+        logger.warning("PaddleOCR not installed. Install with: pip install paddlepaddle paddleocr")
         return ""
     except Exception as e:
         logger.warning(f"PaddleOCR page extraction failed: {pdf_path.name}: {e}")

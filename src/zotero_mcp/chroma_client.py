@@ -18,8 +18,7 @@ try:
     from chromadb.utils.embedding_functions import register_embedding_function
 except ImportError as e:
     raise ImportError(
-        "chromadb is required for semantic search. "
-        "Install it with: pip install 'zotero-mcp-server[semantic]'"
+        "chromadb is required for semantic search. Install it with: pip install 'zotero-mcp-server[semantic]'"
     ) from e
 
 from zotero_mcp.utils import suppress_stdout
@@ -41,7 +40,9 @@ class OpenAIEmbeddingFunction(EmbeddingFunction):
 
     max_input_tokens = 8000  # text-embedding-3-* limit is 8191
 
-    def __init__(self, model_name: str = "text-embedding-3-small", api_key: str | None = None, base_url: str | None = None):
+    def __init__(
+        self, model_name: str = "text-embedding-3-small", api_key: str | None = None, base_url: str | None = None
+    ):
         self.model_name = model_name
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.base_url = base_url or os.getenv("OPENAI_BASE_URL")
@@ -50,6 +51,7 @@ class OpenAIEmbeddingFunction(EmbeddingFunction):
 
         try:
             import openai
+
             client_kwargs = {"api_key": self.api_key}
             if self.base_url:
                 client_kwargs["base_url"] = self.base_url
@@ -74,10 +76,7 @@ class OpenAIEmbeddingFunction(EmbeddingFunction):
 
     def __call__(self, input: Documents) -> Embeddings:
         """Generate embeddings using OpenAI API."""
-        response = self.client.embeddings.create(
-            model=self.model_name,
-            input=input
-        )
+        response = self.client.embeddings.create(model=self.model_name, input=input)
         return [data.embedding for data in response.data]
 
     def embed_query(self, text: str) -> list[float]:
@@ -88,7 +87,8 @@ class OpenAIEmbeddingFunction(EmbeddingFunction):
         """Truncate using tiktoken cl100k_base (correct for OpenAI models)."""
         try:
             import tiktoken
-            if not hasattr(self, '_tokenizer'):
+
+            if not hasattr(self, "_tokenizer"):
                 self._tokenizer = tiktoken.get_encoding("cl100k_base")
             tokens = self._tokenizer.encode(text, disallowed_special=())
             if len(tokens) > max_tokens:
@@ -134,7 +134,9 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
     # prefix tokens are reserved separately (see V2_PREFIX_TOKEN_BUDGET).
     max_input_tokens = 2000
 
-    def __init__(self, model_name: str = "gemini-embedding-001", api_key: str | None = None, base_url: str | None = None):
+    def __init__(
+        self, model_name: str = "gemini-embedding-001", api_key: str | None = None, base_url: str | None = None
+    ):
         self.model_name = model_name
         # Model-aware token limit. For v2 models, derive from:
         #   hard_cap (8192) - safety_margin (192, for char-based truncation
@@ -153,6 +155,7 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
         try:
             from google import genai
             from google.genai import types
+
             client_kwargs = {"api_key": self.api_key}
             if self.base_url:
                 http_options = types.HttpOptions(baseUrl=self.base_url)
@@ -204,7 +207,7 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
 
         embeddings: list = []
         for start in range(0, len(prepared), self.GEMINI_MAX_BATCH):
-            batch = prepared[start:start + self.GEMINI_MAX_BATCH]
+            batch = prepared[start : start + self.GEMINI_MAX_BATCH]
             if is_v2:
                 response = self.client.models.embed_content(
                     model=self.model_name,
@@ -269,10 +272,13 @@ class HuggingFaceEmbeddingFunction(EmbeddingFunction):
 
         try:
             from sentence_transformers import SentenceTransformer
+
             logger.info(f"Loading embedding model: {model_name}")
             self.model = SentenceTransformer(model_name, trust_remote_code=True)
         except ImportError:
-            raise ImportError("sentence-transformers package is required for HuggingFace embeddings. Install with: pip install sentence-transformers")
+            raise ImportError(
+                "sentence-transformers package is required for HuggingFace embeddings. Install with: pip install sentence-transformers"
+            )
 
         # Read limit from model metadata; conservative fallback
         self.max_input_tokens = getattr(self.model, "max_seq_length", 500)
@@ -301,7 +307,7 @@ class HuggingFaceEmbeddingFunction(EmbeddingFunction):
 
     def truncate(self, text: str, max_tokens: int) -> str:
         """Truncate using the model's own tokenizer."""
-        tokenizer = getattr(self.model, 'tokenizer', None)
+        tokenizer = getattr(self.model, "tokenizer", None)
         if tokenizer is not None:
             encoded = tokenizer.encode(text, add_special_tokens=False)
             if len(encoded) > max_tokens:
@@ -317,11 +323,13 @@ class HuggingFaceEmbeddingFunction(EmbeddingFunction):
 class ChromaClient:
     """ChromaDB client for Zotero semantic search."""
 
-    def __init__(self,
-                 collection_name: str = "zotero_library",
-                 persist_directory: str | None = None,
-                 embedding_model: str = "default",
-                 embedding_config: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        collection_name: str = "zotero_library",
+        persist_directory: str | None = None,
+        embedding_model: str = "default",
+        embedding_config: dict[str, Any] | None = None,
+    ):
         """
         Initialize ChromaDB client.
 
@@ -347,11 +355,7 @@ class ChromaClient:
         # Initialize ChromaDB client with stdout suppression
         with suppress_stdout():
             self.client = chromadb.PersistentClient(
-                path=self.persist_directory,
-                settings=Settings(
-                    anonymized_telemetry=False,
-                    allow_reset=True
-                )
+                path=self.persist_directory, settings=Settings(anonymized_telemetry=False, allow_reset=True)
             )
 
             # Set up embedding function
@@ -362,25 +366,25 @@ class ChromaClient:
             # will have stale config.  Detect the mismatch and drop/recreate.
             try:
                 self.collection = self.client.get_or_create_collection(
-                    name=self.collection_name,
-                    embedding_function=self.embedding_function
+                    name=self.collection_name, embedding_function=self.embedding_function
                 )
 
                 # ChromaDB may silently persist the old embedding function config.
                 # Check if the stored config matches what we want; if not, recreate.
-                stored_config = getattr(self.collection, 'metadata', {}) or {}
+                stored_config = getattr(self.collection, "metadata", {}) or {}
                 if not stored_config:
                     # Try reading config from the collection's config_json_str
                     try:
                         import json as _json
+
                         rows = self.client._sysdb.get_collections(name=self.collection_name)
                         if rows:
-                            raw = getattr(rows[0], 'config_json_str', None) or '{}'
+                            raw = getattr(rows[0], "config_json_str", None) or "{}"
                             cfg = _json.loads(raw)
-                            ef_cfg = cfg.get('embedding_function', {}).get('config', {})
-                            stored_model = ef_cfg.get('model_name', '')
+                            ef_cfg = cfg.get("embedding_function", {}).get("config", {})
+                            stored_model = ef_cfg.get("model_name", "")
                             # Compare stored model with configured model
-                            configured_model = getattr(self.embedding_function, 'model_name', None)
+                            configured_model = getattr(self.embedding_function, "model_name", None)
                             if stored_model and configured_model and stored_model != configured_model:
                                 logger.warning(
                                     f"Stored embedding model '{stored_model}' differs from "
@@ -388,8 +392,7 @@ class ChromaClient:
                                 )
                                 self.client.delete_collection(name=self.collection_name)
                                 self.collection = self.client.create_collection(
-                                    name=self.collection_name,
-                                    embedding_function=self.embedding_function
+                                    name=self.collection_name, embedding_function=self.embedding_function
                                 )
                     except Exception:
                         pass  # Best-effort check; proceed with existing collection
@@ -397,13 +400,11 @@ class ChromaClient:
             except Exception as e:
                 if "embedding function conflict" in str(e).lower():
                     logger.warning(
-                        f"Embedding model changed to '{self.embedding_model}'. "
-                        "Resetting collection for rebuild."
+                        f"Embedding model changed to '{self.embedding_model}'. Resetting collection for rebuild."
                     )
                     self.client.delete_collection(name=self.collection_name)
                     self.collection = self.client.create_collection(
-                        name=self.collection_name,
-                        embedding_function=self.embedding_function
+                        name=self.collection_name, embedding_function=self.embedding_function
                     )
                 else:
                     raise
@@ -453,11 +454,12 @@ class ChromaClient:
         """
         if max_tokens is None:
             max_tokens = self.embedding_max_tokens
-        if hasattr(self.embedding_function, 'truncate'):
+        if hasattr(self.embedding_function, "truncate"):
             return self.embedding_function.truncate(text, max_tokens)
         # Fallback for default ChromaDB embedding function
         try:
             import tiktoken
+
             enc = tiktoken.get_encoding("cl100k_base")
             tokens = enc.encode(text, disallowed_special=())
             if len(tokens) > max_tokens:
@@ -469,10 +471,7 @@ class ChromaClient:
                 text = text[:max_chars]
         return text
 
-    def add_documents(self,
-                     documents: list[str],
-                     metadatas: list[dict[str, Any]],
-                     ids: list[str]) -> None:
+    def add_documents(self, documents: list[str], metadatas: list[dict[str, Any]], ids: list[str]) -> None:
         """
         Add documents to the collection.
 
@@ -482,20 +481,13 @@ class ChromaClient:
             ids: List of unique IDs for each document
         """
         try:
-            self.collection.add(
-                documents=documents,
-                metadatas=metadatas,
-                ids=ids
-            )
+            self.collection.add(documents=documents, metadatas=metadatas, ids=ids)
             logger.info(f"Added {len(documents)} documents to ChromaDB collection")
         except Exception as e:
             logger.error(f"Error adding documents to ChromaDB: {e}")
             raise
 
-    def upsert_documents(self,
-                        documents: list[str],
-                        metadatas: list[dict[str, Any]],
-                        ids: list[str]) -> None:
+    def upsert_documents(self, documents: list[str], metadatas: list[dict[str, Any]], ids: list[str]) -> None:
         """
         Upsert (update or insert) documents to the collection.
 
@@ -505,21 +497,19 @@ class ChromaClient:
             ids: List of unique IDs for each document
         """
         try:
-            self.collection.upsert(
-                documents=documents,
-                metadatas=metadatas,
-                ids=ids
-            )
+            self.collection.upsert(documents=documents, metadatas=metadatas, ids=ids)
             logger.info(f"Upserted {len(documents)} documents to ChromaDB collection")
         except Exception as e:
             logger.error(f"Error upserting documents to ChromaDB: {e}")
             raise
 
-    def search(self,
-               query_texts: list[str],
-               n_results: int = 10,
-               where: dict[str, Any] | None = None,
-               where_document: dict[str, Any] | None = None) -> dict[str, Any]:
+    def search(
+        self,
+        query_texts: list[str],
+        n_results: int = 10,
+        where: dict[str, Any] | None = None,
+        where_document: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """
         Search for similar documents.
 
@@ -547,12 +537,12 @@ class ChromaClient:
                 self.embedding_function,
                 (OpenAIEmbeddingFunction, GeminiEmbeddingFunction, HuggingFaceEmbeddingFunction),
             )
-            if _is_custom_ef and hasattr(self.embedding_function, 'embed_query') and query_texts:
+            if _is_custom_ef and hasattr(self.embedding_function, "embed_query") and query_texts:
                 query_embeddings = []
                 for qt in query_texts:
                     emb = self.embedding_function.embed_query(qt)
                     # Ensure plain Python floats (some providers return numpy)
-                    if hasattr(emb, 'tolist'):
+                    if hasattr(emb, "tolist"):
                         emb = emb.tolist()
                     query_embeddings.append(emb)
                 query_kwargs["query_embeddings"] = query_embeddings
@@ -588,7 +578,7 @@ class ChromaClient:
                 "name": self.collection_name,
                 "count": count,
                 "embedding_model": self.embedding_model,
-                "persist_directory": self.persist_directory
+                "persist_directory": self.persist_directory,
             }
         except Exception as e:
             logger.error(f"Error getting collection info: {e}")
@@ -597,7 +587,7 @@ class ChromaClient:
                 "count": 0,
                 "embedding_model": self.embedding_model,
                 "persist_directory": self.persist_directory,
-                "error": str(e)
+                "error": str(e),
             }
 
     def reset_collection(self) -> None:
@@ -605,8 +595,7 @@ class ChromaClient:
         try:
             self.client.delete_collection(name=self.collection_name)
             self.collection = self.client.create_collection(
-                name=self.collection_name,
-                embedding_function=self.embedding_function
+                name=self.collection_name, embedding_function=self.embedding_function
             )
             logger.info(f"Reset ChromaDB collection '{self.collection_name}'")
         except Exception as e:
@@ -617,7 +606,7 @@ class ChromaClient:
         """Check if a document exists in the collection."""
         try:
             result = self.collection.get(ids=[doc_id])
-            return len(result['ids']) > 0
+            return len(result["ids"]) > 0
         except Exception:
             return False
 
@@ -633,8 +622,8 @@ class ChromaClient:
         """
         try:
             result = self.collection.get(ids=[doc_id], include=["metadatas"])
-            if result['ids'] and result['metadatas']:
-                return result['metadatas'][0]
+            if result["ids"] and result["metadatas"]:
+                return result["metadatas"][0]
             return None
         except Exception:
             return None
@@ -674,11 +663,7 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
         Configured ChromaClient instance
     """
     # Default configuration
-    config = {
-        "collection_name": "zotero_library",
-        "embedding_model": "default",
-        "embedding_config": {}
-    }
+    config = {"collection_name": "zotero_library", "embedding_model": "default", "embedding_config": {}}
 
     # Load configuration from file if it exists
     if config_path and os.path.exists(config_path):
@@ -706,9 +691,7 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
             if env_key:
                 ec["api_key"] = env_key
         if not ec.get("model_name"):
-            ec["model_name"] = os.getenv(
-                "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"
-            )
+            ec["model_name"] = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
         if not ec.get("base_url"):
             env_base = os.getenv("OPENAI_BASE_URL")
             if env_base:
@@ -723,9 +706,7 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
             if env_key:
                 ec["api_key"] = env_key
         if not ec.get("model_name"):
-            ec["model_name"] = os.getenv(
-                "GEMINI_EMBEDDING_MODEL", "gemini-embedding-001"
-            )
+            ec["model_name"] = os.getenv("GEMINI_EMBEDDING_MODEL", "gemini-embedding-001")
         if not ec.get("base_url"):
             env_base = os.getenv("GEMINI_BASE_URL")
             if env_base:
@@ -736,5 +717,5 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
     return ChromaClient(
         collection_name=config["collection_name"],
         embedding_model=config["embedding_model"],
-        embedding_config=config["embedding_config"]
+        embedding_config=config["embedding_config"],
     )

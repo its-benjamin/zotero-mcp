@@ -701,9 +701,7 @@ async def advanced_search(
             else:
                 client_conditions.append(cond)
 
-        _search_logger.debug(
-            f"[ADVANCED] server_params={server_params}, client_conditions={len(client_conditions)}"
-        )
+        _search_logger.debug(f"[ADVANCED] server_params={server_params}, client_conditions={len(client_conditions)}")
 
         def _extract_values(data: dict[str, object], field: str) -> list[str]:
             field_lower = field.lower()
@@ -880,7 +878,9 @@ async def advanced_search(
         elif "connection" in error_msg.lower():
             suggestion = " Check if Zotero is running."
         elif "invalid" in error_msg.lower() or "condition" in error_msg.lower():
-            suggestion = " Check that condition fields and operators are valid. Use zotero_get_item_fields to see valid fields."
+            suggestion = (
+                " Check that condition fields and operators are valid. Use zotero_get_item_fields to see valid fields."
+            )
         await ctx.error(f"Error in advanced search: {error_msg}")
         return f"Error in advanced search: {error_msg}{suggestion}"
 
@@ -1020,7 +1020,6 @@ async def semantic_search(
         "to make them immediately available for semantic search. Also useful if the "
         "user has added items directly in Zotero since the last update."
     ),
-
 )
 @with_zotero_api_lock
 async def update_search_database(force_rebuild: bool = False, limit: int | None = None, *, ctx: Context) -> str:
@@ -1097,8 +1096,9 @@ async def update_search_database(force_rebuild: bool = False, limit: int | None 
 
 
 @mcp.tool(
-    name="zotero_get_search_database_status", description="Get status information about the semantic search database."
-    , annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+    name="zotero_get_search_database_status",
+    description="Get status information about the semantic search database.",
+    annotations=ToolAnnotations(readOnlyHint=True, openWorldHint=False),
 )
 @with_zotero_api_lock
 async def get_search_database_status(*, ctx: Context) -> str:
@@ -1166,6 +1166,7 @@ async def get_search_database_status(*, ctx: Context) -> str:
     except Exception as e:
         await ctx.error(f"Error getting database status: {str(e)}")
         return f"Error getting database status: {str(e)}"
+
 
 @mcp.tool(
     name="zotero_list_saved_searches",
@@ -1240,10 +1241,7 @@ async def execute_saved_search(
                 break
         if not match:
             names = [s["name"] for s in searches]
-            return (
-                f"No saved search named '{search_name}'. "
-                f"Available searches: {', '.join(names) if names else 'none'}"
-            )
+            return f"No saved search named '{search_name}'. Available searches: {', '.join(names) if names else 'none'}"
 
         limit = _helpers._normalize_limit(limit, default=25)
         search_key = match["key"]
@@ -1309,18 +1307,26 @@ async def execute_saved_search(
         await ctx.info(f"Executing saved search '{match['name']}' via keyword: {query}")
         zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
         items = await _client.run_zotero_call(
-            zot.items, q=query, qmode="everything", limit=limit, sort="dateAdded", direction="desc",
+            zot.items,
+            q=query,
+            qmode="everything",
+            limit=limit,
+            sort="dateAdded",
+            direction="desc",
             operation=f"zot.items(saved_search:{match['name']})",
         )
 
         if not items:
             return f"Saved search '{match['name']}' returned no results."
 
-        output = [f"# Results for Saved Search: {match['name']}", f"**Query:** {query}", f"**Results:** {len(items)} items", ""]
+        output = [
+            f"# Results for Saved Search: {match['name']}",
+            f"**Query:** {query}",
+            f"**Results:** {len(items)} items",
+            "",
+        ]
         for i, item in enumerate(items, 1):
-            output.extend(
-                _utils.format_item_result(item, index=i, abstract_len=0, include_tags=False)
-            )
+            output.extend(_utils.format_item_result(item, index=i, abstract_len=0, include_tags=False))
 
         return "\n".join(output)
 

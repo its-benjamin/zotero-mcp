@@ -20,7 +20,9 @@ def suppress_stdout():
             sys.stdout = old_stdout
 
 
-def format_creators(creators: list[dict[str, str] | str], max_authors: int | None = None, label_types: bool = False) -> str:
+def format_creators(
+    creators: list[dict[str, str] | str], max_authors: int | None = None, label_types: bool = False
+) -> str:
     """
     Format creator names into a string.
 

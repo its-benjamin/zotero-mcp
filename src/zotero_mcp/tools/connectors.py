@@ -59,11 +59,16 @@ async def chatgpt_connector_search(query: str, *, ctx: Context) -> str:
             try:
                 zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
                 items = await _client.run_zotero_call(
-                    zot.items, q=query, qmode="titleCreatorYear", limit=default_limit,
-                    itemType="-attachment -note -annotation", sort="dateAdded", direction="desc",
+                    zot.items,
+                    q=query,
+                    qmode="titleCreatorYear",
+                    limit=default_limit,
+                    itemType="-attachment -note -annotation",
+                    sort="dateAdded",
+                    direction="desc",
                     operation="zot.items(connector_search)",
                 )
-                for item in (items or []):
+                for item in items or []:
                     data = item.get("data", {})
                     key = item.get("key", "")
                     title = data.get("title", "Untitled")
@@ -166,6 +171,3 @@ async def connector_fetch(id: str, *, ctx: Context) -> str:
         return json.dumps(
             {"id": id, "title": "", "text": "", "url": "", "metadata": {"error": str(e)}}, separators=(",", ":")
         )
-
-
-

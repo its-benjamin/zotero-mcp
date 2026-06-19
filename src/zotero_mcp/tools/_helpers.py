@@ -3,16 +3,14 @@
 import json
 import os
 import re
-import socket
 import tempfile
-from ipaddress import ip_address
+import time
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
-
-import requests
+from typing import Any
 
 from zotero_mcp import client as _client
 from zotero_mcp import utils as _utils
+from zotero_mcp.rate_limiter import rate_limited_get
 
 # ---------------------------------------------------------------------------
 # Config file
@@ -20,25 +18,48 @@ from zotero_mcp import utils as _utils
 
 ZOTERO_MCP_CONFIG_PATH = Path.home() / ".config" / "zotero-mcp" / "config.json"
 
+# Cache for config file reads (TTL: 60 seconds)
+_config_cache: dict | None = None
+_config_cache_ts: float = 0.0
+_CONFIG_CACHE_TTL: float = 60.0
+
 
 def _load_zotero_mcp_config() -> dict:
     """Return the parsed ``~/.config/zotero-mcp/config.json``, or ``{}``.
 
     Missing file or parse errors yield an empty dict so callers can use
     ``.get(...)`` chains without guarding.
+
+    Results are cached for 60 seconds to avoid repeated file I/O and JSON parsing.
     """
+    global _config_cache, _config_cache_ts
+
+    now = time.monotonic()
+    if _config_cache is not None and (now - _config_cache_ts) < _CONFIG_CACHE_TTL:
+        return _config_cache
+
     if not ZOTERO_MCP_CONFIG_PATH.exists():
-        return {}
+        result: dict = {}
+        _config_cache = result
+        _config_cache_ts = now
+        return result
     try:
         with open(ZOTERO_MCP_CONFIG_PATH, encoding="utf-8") as f:
-            return json.load(f) or {}
+            result = json.load(f) or {}
+            _config_cache = result
+            _config_cache_ts = now
+            return result
     except (json.JSONDecodeError, OSError):
-        return {}
+        result = {}
+        _config_cache = result
+        _config_cache_ts = now
+        return result
 
 
 # ---------------------------------------------------------------------------
 # Pagination helper
 # ---------------------------------------------------------------------------
+
 
 def _paginate(zot_method, *args, max_items=None, **kwargs):
     """Fetch all results from a pyzotero method using manual pagination.
@@ -58,7 +79,7 @@ def _paginate(zot_method, *args, max_items=None, **kwargs):
         if len(batch) < page_size:
             break
         start += page_size
-        if max_items and len(items) >= max_items:
+        if max_items is not None and max_items > 0 and len(items) >= max_items:
             items = items[:max_items]
             break
     return items
@@ -78,10 +99,17 @@ CROSSREF_TYPE_MAP = {
     "posted-content": "preprint",
     "monograph": "book",
     "reference-entry": "encyclopediaArticle",
-    "dataset": "document",
+    "dataset": "dataset",
     "peer-review": "document",
     "edited-book": "book",
     "standard": "document",
+    "proceedings": "conferencePaper",
+    "reference-book": "book",
+    "journal-issue": "document",
+    "journal-volume": "document",
+    "book-set": "book",
+    "book-part": "bookSection",
+    "book-section": "bookSection",
 }
 
 
@@ -89,24 +117,8 @@ CROSSREF_TYPE_MAP = {
 # Write-operation helpers
 # ---------------------------------------------------------------------------
 
-def apply_library_override(zot, override: dict | None) -> None:
-    """Apply an active-library override to *zot* in place.
 
-    pyzotero uses ``library_type`` as a URL path segment and expects the
-    plural form (``users`` / ``groups``), but the runtime override stores
-    the singular form (``user`` / ``group``) as used by Zotero's switch-
-    library tool. Without the normalization below, writes against a group
-    library hit ``/group/{id}/items`` and 404.
-    """
-    if not override:
-        return
-    zot.library_id = override.get("library_id", zot.library_id)
-    raw_type = override.get("library_type")
-    if raw_type:
-        zot.library_type = raw_type if raw_type.endswith("s") else raw_type + "s"
-
-
-def _get_write_client(ctx):
+def _get_write_client(ctx) -> tuple[Any, Any]:
     """Return (read_client, write_client) for hybrid-mode operations.
 
     In web-only mode: both are the web client.
@@ -118,7 +130,15 @@ def _get_write_client(ctx):
         return read_zot, read_zot
     web_zot = _client.get_web_zotero_client()
     if web_zot is not None:
-        apply_library_override(web_zot, _client.get_active_library())
+        override = _client.get_active_library()
+        if override:
+            web_zot.library_id = override.get("library_id", web_zot.library_id)
+            # pyzotero stores library_type with trailing "s" (e.g. "users", "groups")
+            # but the override stores the raw value (e.g. "user", "group"),
+            # so we must append "s" to match pyzotero's internal convention.
+            raw_type = override.get("library_type")
+            if raw_type:
+                web_zot.library_type = raw_type if raw_type.endswith("s") else raw_type + "s"
         return read_zot, web_zot
     raise ValueError(
         "Cannot perform write operations in local-only mode. "
@@ -126,118 +146,80 @@ def _get_write_client(ctx):
     )
 
 
-def fetch_trashed_collections(zot) -> list[dict]:
-    """Return collections in the active library's trash, or [] on failure.
-
-    Zotero's REST API exposes trashed collections at
-    ``/{users|groups}/{id}/collections/trash``. pyzotero doesn't have a
-    dedicated method for it (only ``trash()``, which returns items), so
-    fall back to ``_retrieve_data``. Non-fatal — callers should treat
-    failures as "no trash data available" rather than raising.
-    """
-    try:
-        resp = zot._retrieve_data(
-            f"/{zot.library_type}/{zot.library_id}/collections/trash"
-        )
-    except Exception:
-        return []
-    try:
-        data = resp.json()
-    except Exception:
-        return []
-    return data if isinstance(data, list) else []
-
-
-def is_collection_trashed(zot, collection_key: str) -> bool | None:
-    """Return True if a collection is in the trash, False if live, None on error.
-
-    Reads a single collection by key and inspects ``data.deleted``. Used to
-    pre-validate ``zotero_manage_collections`` calls so the tool returns a
-    clear error instead of silently filing items into trashed parents.
-    """
-    try:
-        coll = zot.collection(collection_key)
-    except Exception:
-        return None
-    return bool(coll.get("data", {}).get("deleted"))
-
-
-# Fields the Zotero reader/server sets on items but pyzotero's check_items()
-# whitelist (pyzotero/_client.py: check_items) does not include. Any fetched
-# item that carries one of these will be rejected client-side with
-# "Invalid keys present in item N: <field>" when passed back to update_item().
-# The canonical fetch→mutate→update flow then breaks on attachments that have
-# been opened in the Zotero PDF reader (which writes lastRead).
-_UNWRITABLE_ITEM_FIELDS = frozenset({"lastRead"})
-
-
-def _strip_unwritable_fields(item: dict) -> dict:
-    """Remove fields that pyzotero's check_items() rejects from a fetched item.
-
-    Mutates ``item["data"]`` in place and returns the same dict so the caller
-    can chain. Safe to call on any item type — fields not present are ignored.
-    """
-    data = item.get("data")
-    if isinstance(data, dict):
-        for field in _UNWRITABLE_ITEM_FIELDS:
-            data.pop(field, None)
-    return item
-
-
-def _handle_write_response(response, ctx=None):
+async def _handle_write_response(response, ctx=None):
     """Check if a pyzotero write operation succeeded."""
     if hasattr(response, "status_code"):
         ok = response.status_code in (200, 204)
         if not ok and ctx is not None:
-            ctx.error(f"Write failed ({response.status_code}): {response.text[:500]}")
+            await ctx.error(f"Write failed ({response.status_code}): {response.text[:500]}")
         return ok
     if isinstance(response, dict):
         return bool(response.get("success"))
     return bool(response)
 
 
-def ensure_collection_membership(write_zot, item_key: str, coll_keys: list[str], ctx=None) -> list[str]:
-    """Force *item_key* into each collection in *coll_keys*; return keys we couldn't file.
+# ---------------------------------------------------------------------------
+# Input validation
+# ---------------------------------------------------------------------------
 
-    Setting ``item["collections"]`` on ``create_items`` is supposed to atomically
-    file the new item, but reports show it intermittently no-ops — the item
-    lands in My Library root despite the request (#235). This is the
-    deterministic backstop: read the item back, diff against the requested
-    set, and ``addto_collection`` for any that didn't take.
-    """
-    if not coll_keys:
-        return []
+
+def validate_item_key(key: str | None) -> str | None:
+    """Return error message if key is invalid, else None."""
+    if key is None or not str(key).strip():
+        return "Item key cannot be empty"
+    k = str(key).strip()
+    if len(k) != 8 or not k.isalnum():
+        return f"Invalid item key format: {k!r} (expected 8 alphanumeric characters)"
+    return None
+
+
+def validate_collection_key(key: str | None) -> str | None:
+    """Return error message if collection key is invalid, else None."""
+    if key is None or not str(key).strip():
+        return "Collection key cannot be empty"
+    k = str(key).strip()
+    if len(k) != 8 or not k.isalnum():
+        return f"Invalid collection key format: {k!r} (expected 8 alphanumeric characters)"
+    return None
+
+
+def validate_library_id(lib_id: str | int | None) -> str | None:
+    """Return error message if library ID is invalid, else None."""
+    if lib_id is None:
+        return "Library ID cannot be empty"
     try:
-        item = write_zot.item(item_key)
-    except Exception as e:
-        if ctx is not None:
-            ctx.warning(f"Could not re-fetch item {item_key} to verify collection membership: {e}")
-        return list(coll_keys)
-    actual = set(item.get("data", {}).get("collections") or [])
-    failed: list[str] = []
-    for coll_key in coll_keys:
-        if coll_key in actual:
-            continue
-        try:
-            write_zot.addto_collection(coll_key, item)
-            actual.add(coll_key)
-        except Exception as e:
-            failed.append(coll_key)
-            if ctx is not None:
-                ctx.warning(f"Could not file {item_key} in collection {coll_key}: {e}")
-    return failed
+        val = int(lib_id)
+        if val <= 0:
+            return f"Library ID must be a positive integer, got {val}"
+    except (ValueError, TypeError):
+        return f"Library ID must be a positive integer, got {lib_id!r}"
+    return None
+
+
+def validate_tag(tag: str | None) -> str | None:
+    """Return error message if tag is invalid, else None."""
+    if tag is None or not str(tag).strip():
+        return "Tag cannot be empty"
+    t = str(tag).strip()
+    if len(t) > 255:
+        return f"Tag too long ({len(t)} chars, max 255)"
+    return None
 
 
 # ---------------------------------------------------------------------------
 # Input normalization
 # ---------------------------------------------------------------------------
 
+
 def _normalize_limit(limit: int | str | None, default: int = 10, max_val: int = 100) -> int:
     """Coerce *limit* to a bounded int."""
     if limit is None:
         return default
     if isinstance(limit, str):
-        limit = int(limit)
+        try:
+            limit = int(limit)
+        except (ValueError, TypeError):
+            return default
     return max(1, min(limit, max_val))
 
 
@@ -258,10 +240,7 @@ def _normalize_str_list_input(value, field_name="value"):
             if isinstance(parsed, str):
                 s = parsed.strip()
                 return [s] if s else []
-            raise ValueError(
-                f"{field_name} must be a list of strings or a string, "
-                f"got JSON {type(parsed).__name__}"
-            )
+            raise ValueError(f"{field_name} must be a list of strings or a string, got JSON {type(parsed).__name__}")
         except json.JSONDecodeError:
             pass
         parts = [p.strip() for p in raw.split(",") if p.strip()]
@@ -271,7 +250,7 @@ def _normalize_str_list_input(value, field_name="value"):
     raise ValueError(f"{field_name} must be a list of strings or a string")
 
 
-def _normalize_tag_filter(value):
+def _normalize_tag_filter(value) -> list[str]:
     """Normalize a tag-filter argument into a list[str] for pyzotero.
 
     Accepts every shape we've seen clients produce:
@@ -288,6 +267,7 @@ def _normalize_tag_filter(value):
     pyzotero's ``tag=`` parameter expects. Either path ended up rejected
     upstream of the search logic. This normalizer collapses them all.
     """
+
     def _extract(v):
         if isinstance(v, dict):
             for key in ("tag", "name", "value"):
@@ -320,22 +300,27 @@ def _normalize_tag_filter(value):
     return []
 
 
-def _resolve_collection_names(zot, names, ctx=None):
-    """Resolve collection names to keys (case-insensitive)."""
+async def _resolve_collection_names(zot, names, ctx=None):
+    """Resolve collection names to keys (case-insensitive). Cached for 60s."""
     if not names:
         return []
-    all_collections = _paginate(zot.collections)
+    from zotero_mcp.cache import TTLCache
+
+    if not hasattr(_resolve_collection_names, "_cache"):
+        _resolve_collection_names._cache = TTLCache(ttl_seconds=60.0, max_size=1)  # type: ignore[attr-defined]
+    cache = _resolve_collection_names._cache  # type: ignore[attr-defined]
+    all_collections = cache.get("all_collections")
+    if all_collections is None:
+        all_collections = _paginate(zot.collections)
+        cache.set("all_collections", all_collections or [])
     results = []
     for name in names:
         name_lower = name.lower()
-        matches = [
-            c["key"] for c in all_collections
-            if c.get("data", {}).get("name", "").lower() == name_lower
-        ]
+        matches = [c["key"] for c in (all_collections or []) if c.get("data", {}).get("name", "").lower() == name_lower]
         if not matches:
             raise ValueError(f"No collection found matching name '{name}'")
         if len(matches) > 1 and ctx is not None:
-            ctx.warning(
+            await ctx.warning(
                 f"Multiple collections match '{name}': {matches}. "
                 "Using all. Pass collection keys directly to disambiguate."
             )
@@ -377,8 +362,7 @@ def _normalize_isbn(raw):
     if s.lower().startswith("isbn-") or s.lower().startswith("isbn "):
         s = s[5:].strip()
     if s.lower().startswith("http://") or s.lower().startswith("https://"):
-        m = re.search(r"/(97[89][\- ]?\d[\- ]?\d{3}[\- ]?\d{5}[\- ]?\d|\d{9}[\dX])",
-                      s, flags=re.IGNORECASE)
+        m = re.search(r"/(97[89][\- ]?\d[\- ]?\d{3}[\- ]?\d{5}[\- ]?\d|\d{9}[\dX])", s, flags=re.IGNORECASE)
         if not m:
             return None
         s = m.group(1)
@@ -429,7 +413,8 @@ def _normalize_arxiv_id(raw):
     if s.lower().startswith("http://") or s.lower().startswith("https://"):
         m = re.search(
             r"arxiv\.org/(?:abs|pdf)/([0-9]{4}\.[0-9]{4,5}(?:v\d+)?|[a-z\-]+/\d{7}(?:v\d+)?)(?:\.pdf)?",
-            s, flags=re.IGNORECASE,
+            s,
+            flags=re.IGNORECASE,
         )
         if not m:
             return None
@@ -445,99 +430,17 @@ def _normalize_arxiv_id(raw):
 # PDF / open-access helpers
 # ---------------------------------------------------------------------------
 
-_MAX_PDF_REDIRECTS = 5
-_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
-
-def _url_resolves_to_public_host(url: str) -> bool:
-    """Return ``True`` only if ``url`` is http(s) and its host resolves
-    entirely to globally-routable IP addresses.
-
-    SSRF guard for the open-access PDF download path: the candidate URL comes
-    from third-party metadata APIs (Unpaywall / Semantic Scholar) and is
-    therefore attacker-influenceable (a hostile paper record, or prompt
-    injection steering ``zotero_add_by_doi``). We reject non-http(s) schemes
-    and any host that resolves to a private, loopback, link-local, reserved,
-    or otherwise non-global address — including the 169.254.169.254
-    cloud-metadata endpoint, which matters for HTTP/SSE-transport deployments.
-
-    Note: a determined DNS-rebinding attacker could still flip the record
-    between this check and the socket connect. Re-validating every redirect
-    hop (see ``_guarded_pdf_get``) and rejecting on the first non-global
-    result narrows that window to a non-practical vector for this tool's
-    threat model; full pinning would require a custom connection adapter.
-    """
-    parsed = urlparse(url)
-    if parsed.scheme not in ("http", "https") or not parsed.hostname:
-        return False
+async def _download_and_attach_pdf(write_zot, item_key, pdf_url, doi, ctx):
+    """Download a PDF from a URL and attach it to a Zotero item."""
     try:
-        infos = socket.getaddrinfo(parsed.hostname, parsed.port or None)
-    except (socket.gaierror, UnicodeError, ValueError):
-        return False
-    if not infos:
-        return False
-    for info in infos:
-        sockaddr = info[4]
-        try:
-            ip = ip_address(sockaddr[0])
-        except ValueError:
-            return False
-        if not ip.is_global or ip.is_reserved or ip.is_multicast:
-            return False
-    return True
-
-
-def _guarded_pdf_get(pdf_url, ctx):
-    """GET ``pdf_url`` with SSRF protection.
-
-    Validates that the host resolves to public IPs, follows redirects
-    manually (re-validating each hop), and returns the final ``requests``
-    response, or ``None`` if any URL in the chain is rejected or there are
-    too many redirects.
-    """
-    current = pdf_url
-    for _ in range(_MAX_PDF_REDIRECTS + 1):
-        if not _url_resolves_to_public_host(current):
-            ctx.info(f"PDF URL rejected by SSRF guard: {current}")
-            return None
-        resp = requests.get(current, timeout=30, stream=True, allow_redirects=False)
-        if resp.status_code in _REDIRECT_STATUSES:
-            location = resp.headers.get("Location")
-            try:
-                resp.close()
-            except Exception:
-                pass
-            if not location:
-                return None
-            current = urljoin(current, location)
-            continue
-        return resp
-    ctx.info("Too many redirects while fetching PDF")
-    return None
-
-
-def _download_and_attach_pdf(write_zot, item_key, pdf_url, doi, ctx):
-    """Download a PDF from a URL and attach it to a Zotero item.
-
-    The URL is fetched through ``_guarded_pdf_get`` (SSRF guard + manual
-    redirect re-validation), since it originates from third-party metadata
-    APIs rather than the user.
-
-    Returns the WebDAV-status suffix string on success (``""`` when WebDAV
-    is not configured, otherwise something like ``" (uploaded to WebDAV
-    as <key>.zip)"`` or a warning if the PUT failed). Returns ``None``
-    on failure so callers can branch with ``if suffix is not None``.
-    """
-    try:
-        pdf_resp = _guarded_pdf_get(pdf_url, ctx)
-        if pdf_resp is None:
-            return None
+        pdf_resp = rate_limited_get("unpaywall", pdf_url, timeout=30, stream=True)
         pdf_resp.raise_for_status()
 
         content_type = pdf_resp.headers.get("Content-Type", "")
         if "pdf" not in content_type and "octet-stream" not in content_type:
-            ctx.info(f"URL did not return a PDF (Content-Type: {content_type})")
-            return None
+            await ctx.info(f"URL did not return a PDF (Content-Type: {content_type})")
+            return False
 
         with tempfile.TemporaryDirectory() as tmpdir:
             filename = f"{doi.replace('/', '_')}.pdf"
@@ -547,70 +450,20 @@ def _download_and_attach_pdf(write_zot, item_key, pdf_url, doi, ctx):
                     f.write(chunk)
 
             if os.path.getsize(filepath) < 1000:
-                ctx.info("Downloaded file too small, likely not a real PDF")
-                return None
+                await ctx.info("Downloaded file too small, likely not a real PDF")
+                return False
 
-            attach_result = write_zot.attachment_both(
+            write_zot.attachment_both(
                 [(filename, filepath)],
                 parentid=item_key,
             )
-            # Must run inside the with-block — temp file disappears on exit.
-            return _maybe_upload_to_webdav(attach_result, filepath, ctx)
+        return True
     except Exception as e:
-        ctx.info(f"PDF download/attach failed: {e}")
-        return None
+        await ctx.info(f"PDF download/attach failed: {e}")
+        return False
 
 
-def _maybe_upload_to_webdav(attach_result, file_path, ctx):
-    """Suffix to append to a user-facing 'file attached' message.
-
-    PR #279 added WebDAV-aware upload to ``zotero_add_from_file``. The same
-    treatment is needed everywhere else ``attachment_both`` is called: the
-    Web API's file upload lands bytes in Zotero Storage, which a desktop
-    client with File Syncing set to WebDAV never consults.
-
-    Returns ``""`` when WebDAV is not configured, when the attachment key
-    cannot be extracted, or after a successful PUT with logging via ``ctx``
-    (callers that don't surface the suffix can ignore the return value).
-    On a successful PUT returns ``" (uploaded to WebDAV as <key>.zip)"``;
-    on PUT failure returns ``" (WARNING: WebDAV upload failed — <err>; ...)"``
-    so callers can keep the user-visible signal without re-implementing the
-    branch.
-    """
-    from zotero_mcp import webdav as _webdav
-
-    if not _webdav.is_webdav_configured():
-        return ""
-
-    attachment_key = None
-    if isinstance(attach_result, dict):
-        for status in ("success", "unchanged"):
-            for entry in attach_result.get(status, []) or []:
-                if isinstance(entry, dict) and entry.get("key"):
-                    attachment_key = entry["key"]
-                    break
-            if attachment_key:
-                break
-
-    if not attachment_key:
-        return ""
-
-    try:
-        _webdav.upload_attachment_to_webdav(
-            attachment_key=attachment_key,
-            file_path=file_path,
-        )
-        ctx.info(f"WebDAV PUT: {attachment_key}.zip uploaded")
-        return f" (uploaded to WebDAV as {attachment_key}.zip)"
-    except Exception as e:
-        ctx.info(f"WebDAV PUT failed for {attachment_key}: {e}")
-        return (
-            f" (WARNING: WebDAV upload failed — {e}; "
-            f"attachment {attachment_key} exists but has no file bytes on WebDAV)"
-        )
-
-
-def _attach_pdf_linked_url(write_zot, pdf_url, parent_key, ctx):
+async def _attach_pdf_linked_url(write_zot, pdf_url, parent_key, ctx):
     """Create a linked-URL attachment (bookmarks the PDF URL without downloading)."""
     try:
         template = write_zot.item_template("attachment", "linked_url")
@@ -620,18 +473,19 @@ def _attach_pdf_linked_url(write_zot, pdf_url, parent_key, ctx):
         template["parentItem"] = parent_key
         result = write_zot.create_items([template])
         if result.get("success"):
-            ctx.info(f"Linked URL attachment created for {pdf_url}")
+            await ctx.info(f"Linked URL attachment created for {pdf_url}")
             return True
         return False
     except Exception as e:
-        ctx.info(f"Linked URL attachment failed: {e}")
+        await ctx.info(f"Linked URL attachment failed: {e}")
         return False
 
 
-def _try_unpaywall(doi, ctx):
+async def _try_unpaywall(doi, ctx):
     """Try Unpaywall API for open-access PDF URLs."""
     try:
-        resp = requests.get(
+        resp = rate_limited_get(
+            "unpaywall",
             f"https://api.unpaywall.org/v2/{doi}",
             params={"email": "zotero-mcp@users.noreply.github.com"},
             timeout=10,
@@ -644,49 +498,48 @@ def _try_unpaywall(doi, ctx):
         best = oa_data.get("best_oa_location") or {}
         pdf_url = best.get("url_for_pdf")
         if pdf_url:
-            ctx.info("Unpaywall: found PDF via best_oa_location")
+            await ctx.info("Unpaywall: found PDF via best_oa_location")
             return pdf_url
 
         for loc in oa_data.get("oa_locations", []):
             pdf_url = loc.get("url_for_pdf")
             if pdf_url:
-                ctx.info("Unpaywall: found PDF via alternate oa_location")
+                await ctx.info("Unpaywall: found PDF via alternate oa_location")
                 return pdf_url
 
         landing = best.get("url")
         if landing:
-            ctx.info("Unpaywall: no direct PDF URL, trying landing page")
+            await ctx.info("Unpaywall: no direct PDF URL, trying landing page")
             return landing
 
         return None
     except Exception as e:
-        ctx.info(f"Unpaywall lookup failed: {e}")
+        await ctx.info(f"Unpaywall lookup failed: {e}")
         return None
 
 
-def _try_arxiv_from_crossref(crossref_metadata, ctx):
+async def _try_arxiv_from_crossref(crossref_metadata, ctx):
     """Check CrossRef metadata for an arXiv ID and return a PDF URL."""
     if not crossref_metadata:
         return None
     try:
         relations = crossref_metadata.get("relation", {})
-        for rel_type in ("has-preprint", "is-preprint-of", "is-identical-to",
-                         "is-version-of", "has-version"):
+        for rel_type in ("has-preprint", "is-preprint-of", "is-identical-to", "is-version-of", "has-version"):
             for rel in relations.get(rel_type, []):
                 rel_id = rel.get("id", "")
                 if rel.get("id-type") == "arxiv" and rel_id:
-                    ctx.info(f"CrossRef relation contains arXiv ID: {rel_id}")
+                    await ctx.info(f"CrossRef relation contains arXiv ID: {rel_id}")
                     return f"https://arxiv.org/pdf/{rel_id}.pdf"
                 if rel.get("id-type") == "doi" and "arxiv" in rel_id.lower():
                     m = re.search(r"arXiv\.(\d{4}\.\d{4,5}(?:v\d+)?)", rel_id, re.IGNORECASE)
                     if m:
                         arxiv_id = m.group(1)
-                        ctx.info(f"CrossRef relation contains arXiv DOI: {rel_id} -> {arxiv_id}")
+                        await ctx.info(f"CrossRef relation contains arXiv DOI: {rel_id} -> {arxiv_id}")
                         return f"https://arxiv.org/pdf/{arxiv_id}.pdf"
 
         for alt_id in crossref_metadata.get("alternative-id", []):
             if re.match(r"\d{4}\.\d{4,5}", str(alt_id)):
-                ctx.info(f"CrossRef alternative-id looks like arXiv: {alt_id}")
+                await ctx.info(f"CrossRef alternative-id looks like arXiv: {alt_id}")
                 return f"https://arxiv.org/pdf/{alt_id}.pdf"
 
         for link in crossref_metadata.get("link", []):
@@ -694,19 +547,20 @@ def _try_arxiv_from_crossref(crossref_metadata, ctx):
             if "arxiv.org" in url:
                 m = re.search(r"arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5}(?:v\d+)?)", url)
                 if m:
-                    ctx.info("CrossRef link contains arXiv URL")
+                    await ctx.info("CrossRef link contains arXiv URL")
                     return f"https://arxiv.org/pdf/{m.group(1)}.pdf"
 
         return None
     except Exception as e:
-        ctx.info(f"arXiv-from-CrossRef check failed: {e}")
+        await ctx.info(f"arXiv-from-CrossRef check failed: {e}")
         return None
 
 
-def _try_semantic_scholar(doi, ctx):
+async def _try_semantic_scholar(doi, ctx):
     """Try Semantic Scholar API for an open-access PDF URL."""
     try:
-        resp = requests.get(
+        resp = rate_limited_get(
+            "semantic_scholar",
             f"https://api.semanticscholar.org/graph/v1/paper/DOI:{doi}",
             params={"fields": "openAccessPdf"},
             timeout=10,
@@ -718,21 +572,21 @@ def _try_semantic_scholar(doi, ctx):
         oa_pdf = data.get("openAccessPdf") or {}
         pdf_url = oa_pdf.get("url")
         if pdf_url:
-            ctx.info("Semantic Scholar: found OA PDF")
+            await ctx.info("Semantic Scholar: found OA PDF")
             return pdf_url
         return None
     except Exception as e:
-        ctx.info(f"Semantic Scholar lookup failed: {e}")
+        await ctx.info(f"Semantic Scholar lookup failed: {e}")
         return None
 
 
-def _try_pmc(doi, ctx):
+async def _try_pmc(doi, ctx):
     """Try PubMed Central for a free PDF via DOI-to-PMCID conversion."""
     try:
-        conv_resp = requests.get(
+        conv_resp = rate_limited_get(
+            "pmc",
             "https://pmc.ncbi.nlm.nih.gov/tools/idconv/api/v1/articles/",
-            params={"ids": doi, "format": "json", "tool": "zotero-mcp",
-                    "email": "zotero-mcp@users.noreply.github.com"},
+            params={"ids": doi, "format": "json", "tool": "zotero-mcp", "email": "zotero-mcp@users.noreply.github.com"},
             timeout=10,
         )
         if conv_resp.status_code != 200:
@@ -746,16 +600,15 @@ def _try_pmc(doi, ctx):
         if not pmcid:
             return None
 
-        ctx.info(f"PMC: found PMCID {pmcid}")
+        await ctx.info(f"PMC: found PMCID {pmcid}")
         return f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/pdf/"
 
     except Exception as e:
-        ctx.info(f"PMC lookup failed: {e}")
+        await ctx.info(f"PMC lookup failed: {e}")
         return None
 
 
-def _try_attach_oa_pdf(write_zot, item_key, doi, ctx, crossref_metadata=None,
-                       attach_mode="auto"):
+async def _try_attach_oa_pdf(write_zot, item_key, doi, ctx, crossref_metadata=None, attach_mode="auto"):
     """Attempt to find and attach an open-access PDF for a DOI."""
     sources = [
         ("Unpaywall", lambda: _try_unpaywall(doi, ctx)),
@@ -768,24 +621,21 @@ def _try_attach_oa_pdf(write_zot, item_key, doi, ctx, crossref_metadata=None,
 
     for source_name, find_url in sources:
         try:
-            pdf_url = find_url()
+            pdf_url = await find_url()
             if pdf_url:
-                ctx.info(f"Trying PDF from {source_name}: {pdf_url}")
+                await ctx.info(f"Trying PDF from {source_name}: {pdf_url}")
                 found_urls.append((source_name, pdf_url))
 
                 if attach_mode == "linked_url":
-                    if _attach_pdf_linked_url(write_zot, pdf_url, item_key, ctx):
+                    if await _attach_pdf_linked_url(write_zot, pdf_url, item_key, ctx):
                         return f"PDF linked (source: {source_name})"
                 else:  # "auto" or "import_file" — try download only
-                    webdav_suffix = _download_and_attach_pdf(
-                        write_zot, item_key, pdf_url, doi, ctx
-                    )
-                    if webdav_suffix is not None:
-                        return f"PDF attached (source: {source_name}){webdav_suffix}"
+                    if await _download_and_attach_pdf(write_zot, item_key, pdf_url, doi, ctx):
+                        return f"PDF attached (source: {source_name})"
 
-                ctx.info(f"{source_name} URL didn't yield a valid PDF, trying next source")
+                await ctx.info(f"{source_name} URL didn't yield a valid PDF, trying next source")
         except Exception as e:
-            ctx.info(f"{source_name} failed: {e}")
+            await ctx.info(f"{source_name} failed: {e}")
 
     if found_urls:
         # URLs were found but couldn't be downloaded — report them so the user
@@ -802,6 +652,7 @@ def _try_attach_oa_pdf(write_zot, item_key, doi, ctx, crossref_metadata=None,
 # ---------------------------------------------------------------------------
 # Citation key helpers
 # ---------------------------------------------------------------------------
+
 
 def _extra_has_citekey(extra: str, citekey: str) -> bool:
     """Check if the Extra field contains the given citation key."""
@@ -848,9 +699,26 @@ def _format_bbt_result(bbt_item: dict, citekey: str) -> str:
 # Token estimation helpers
 # ---------------------------------------------------------------------------
 
+# Cached tiktoken encoder (loaded once, reused)
+_tiktoken_encoder = None
+_tiktoken_loaded = False
+
+
 def _estimate_tokens(text: str) -> int:
-    """Rough token estimate at ~4 characters per token."""
-    return len(text) // 4
+    """Estimate token count. Uses tiktoken if available, else conservative heuristic."""
+    global _tiktoken_encoder, _tiktoken_loaded
+    if not _tiktoken_loaded:
+        _tiktoken_loaded = True
+        try:
+            import tiktoken
+
+            _tiktoken_encoder = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            _tiktoken_encoder = None
+    if _tiktoken_encoder is not None:
+        return len(_tiktoken_encoder.encode(text))
+    # Conservative fallback: ~3 chars/token (better for academic text with formulas/CJK)
+    return len(text) // 3
 
 
 def _prepend_size_warning(text: str, suggestions: str = "") -> str:
@@ -861,3 +729,13 @@ def _prepend_size_warning(text: str, suggestions: str = "") -> str:
     suggestion_text = f" {suggestions}" if suggestions else ""
     warning = f"*Response size: ~{est // 1000}K tokens.{suggestion_text}*\n\n"
     return warning + text
+
+
+async def _notify_library_changed(ctx) -> None:
+    """Best-effort notification that Zotero-backed resources may have changed."""
+    try:
+        from mcp.types import ResourceListChangedNotification
+
+        await ctx.send_notification(ResourceListChangedNotification())
+    except Exception:
+        pass

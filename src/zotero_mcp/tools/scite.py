@@ -349,7 +349,10 @@ async def check_retractions(
             if not keys:
                 return f"Collection '{collection}' not found"
             items = await _client.run_zotero_call(
-                zot.collection_items, keys[0], limit=limit_int, itemType="-attachment",
+                zot.collection_items,
+                keys[0],
+                limit=limit_int,
+                itemType="-attachment",
                 operation=f"zot.collection_items({keys[0]})",
             )
         elif tag:

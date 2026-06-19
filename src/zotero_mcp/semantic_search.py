@@ -17,6 +17,7 @@ from typing import Any
 
 try:
     import tiktoken
+
     _tokenizer = tiktoken.get_encoding("cl100k_base")
 except Exception:
     tiktoken = None
@@ -88,6 +89,7 @@ class CrossEncoderReranker:
 
     def __init__(self, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"):
         from sentence_transformers import CrossEncoder
+
         self.model = CrossEncoder(model_name)
 
     def rerank(self, query: str, documents: list[str], top_k: int) -> list[int]:
@@ -104,10 +106,9 @@ class CrossEncoderReranker:
 class ZoteroSemanticSearch:
     """Semantic search interface for Zotero libraries using ChromaDB."""
 
-    def __init__(self,
-                 chroma_client: ChromaClient | None = None,
-                 config_path: str | None = None,
-                 db_path: str | None = None):
+    def __init__(
+        self, chroma_client: ChromaClient | None = None, config_path: str | None = None, db_path: str | None = None
+    ):
         """
         Initialize semantic search.
 
@@ -155,12 +156,7 @@ class ZoteroSemanticSearch:
 
     def _load_update_config(self) -> dict[str, Any]:
         """Load update configuration from file or use defaults."""
-        config = {
-            "auto_update": False,
-            "update_frequency": "manual",
-            "last_update": None,
-            "update_days": 7
-        }
+        config = {"auto_update": False, "update_frequency": "manual", "last_update": None, "update_days": 7}
 
         if self.config_path and os.path.exists(self.config_path):
             try:
@@ -236,7 +232,7 @@ class ZoteroSemanticSearch:
             full_config["semantic_search"]["last_sync_version"] = int(last_sync_version)
 
         try:
-            with open(self.config_path, 'w') as f:
+            with open(self.config_path, "w") as f:
                 json.dump(full_config, f, indent=2)
         except Exception as e:
             logger.error(f"Error saving update config: {e}")
@@ -288,7 +284,8 @@ class ZoteroSemanticSearch:
         if note := data.get("note"):
             # Clean HTML from notes
             import re
-            note_text = re.sub(r'<[^>]+>', '', note)
+
+            note_text = re.sub(r"<[^>]+>", "", note)
             extra_fields.append(note_text)
 
         # Combine all text fields
@@ -398,13 +395,14 @@ class ZoteroSemanticSearch:
 
         return False
 
-    def _get_items_from_source(self,
-                               limit: int | None = None,
-                               extract_fulltext: bool = False,
-                               chroma_client: ChromaClient | None = None,
-                               force_rebuild: bool = False,
-                               include_fulltext_via_api: bool = False,
-                               ) -> list[dict[str, Any]]:
+    def _get_items_from_source(
+        self,
+        limit: int | None = None,
+        extract_fulltext: bool = False,
+        chroma_client: ChromaClient | None = None,
+        force_rebuild: bool = False,
+        include_fulltext_via_api: bool = False,
+    ) -> list[dict[str, Any]]:
         """
         Get items from either local database or API.
 
@@ -435,15 +433,18 @@ class ZoteroSemanticSearch:
                     "Set ZOTERO_LOCAL=true or run 'zotero-mcp setup' to enable local mode."
                 )
             return self._get_items_from_local_db(
-                limit,
-                extract_fulltext=extract_fulltext,
-                chroma_client=chroma_client,
-                force_rebuild=force_rebuild
+                limit, extract_fulltext=extract_fulltext, chroma_client=chroma_client, force_rebuild=force_rebuild
             )
         else:
             return self._get_items_from_api(limit, include_fulltext=include_fulltext_via_api)
 
-    def _get_items_from_local_db(self, limit: int | None = None, extract_fulltext: bool = False, chroma_client: ChromaClient | None = None, force_rebuild: bool = False) -> list[dict[str, Any]]:
+    def _get_items_from_local_db(
+        self,
+        limit: int | None = None,
+        extract_fulltext: bool = False,
+        chroma_client: ChromaClient | None = None,
+        force_rebuild: bool = False,
+    ) -> list[dict[str, Any]]:
         """
         Get items from local Zotero database.
 
@@ -468,17 +469,22 @@ class ZoteroSemanticSearch:
                 if self.config_path and os.path.exists(self.config_path):
                     with open(self.config_path) as _f:
                         _cfg = json.load(_f)
-                        semantic_cfg = _cfg.get('semantic_search', {})
-                        extraction_cfg = semantic_cfg.get('extraction', {})
-                        pdf_max_pages = extraction_cfg.get('pdf_max_pages')
-                        pdf_timeout = extraction_cfg.get('pdf_timeout', 30)
+                        semantic_cfg = _cfg.get("semantic_search", {})
+                        extraction_cfg = semantic_cfg.get("extraction", {})
+                        pdf_max_pages = extraction_cfg.get("pdf_max_pages")
+                        pdf_timeout = extraction_cfg.get("pdf_timeout", 30)
                         # Use config db_path only if no CLI override
                         if not zotero_db_path:
-                            zotero_db_path = semantic_cfg.get('zotero_db_path')
+                            zotero_db_path = semantic_cfg.get("zotero_db_path")
             except Exception:
                 pass
 
-            with suppress_stdout(), LocalZoteroReader(db_path=zotero_db_path, pdf_max_pages=pdf_max_pages, pdf_timeout=pdf_timeout) as reader:
+            with (
+                suppress_stdout(),
+                LocalZoteroReader(
+                    db_path=zotero_db_path, pdf_max_pages=pdf_max_pages, pdf_timeout=pdf_timeout
+                ) as reader,
+            ):
                 # Phase 1: fetch metadata only (fast)
                 sys.stderr.write("Scanning local Zotero database for items...\n")
                 local_items = reader.get_items_with_text(limit=limit, include_fulltext=False)
@@ -526,7 +532,11 @@ class ZoteroSemanticSearch:
                             if not k:
                                 continue
                             best = key_to_best.get(k)
-                            if best is not None and best is not it and getattr(best, "item_type", None) == "journalArticle":
+                            if (
+                                best is not None
+                                and best is not it
+                                and getattr(best, "item_type", None) == "journalArticle"
+                            ):
                                 drop = True
                                 break
                         if drop:
@@ -537,7 +547,9 @@ class ZoteroSemanticSearch:
                 total_to_extract = len(local_items)
                 if total_to_extract != candidate_count:
                     try:
-                        sys.stderr.write(f"After filtering/dedup: {total_to_extract} items to process. Extracting content...\n")
+                        sys.stderr.write(
+                            f"After filtering/dedup: {total_to_extract} items to process. Extracting content...\n"
+                        )
                     except Exception:
                         pass
                 else:
@@ -719,7 +731,9 @@ class ZoteroSemanticSearch:
                             for name in _skipped_pdfs:
                                 sys.stderr.write(f"    - {name}\n")
                         if _skipped_failed:
-                            sys.stderr.write(f"  {len(_skipped_failed)} item(s) skipped (PDF extraction previously failed):\n")
+                            sys.stderr.write(
+                                f"  {len(_skipped_failed)} item(s) skipped (PDF extraction previously failed):\n"
+                            )
                             for name in _skipped_failed[:5]:  # Show first 5
                                 sys.stderr.write(f"    - {name}\n")
                             if len(_skipped_failed) > 5:
@@ -745,19 +759,19 @@ class ZoteroSemanticSearch:
                         "version": 0,  # Local items don't have versions
                         "data": {
                             "key": item.key,
-                            "itemType": getattr(item, 'item_type', None) or "journalArticle",
+                            "itemType": getattr(item, "item_type", None) or "journalArticle",
                             "title": item.title or "",
                             "abstractNote": item.abstract or "",
                             "extra": item.extra or "",
                             # Include fulltext only when extracted
-                            "fulltext": getattr(item, 'fulltext', None) or "" if extract_fulltext else "",
-                            "fulltextSource": getattr(item, 'fulltext_source', None) or "" if extract_fulltext else "",
+                            "fulltext": getattr(item, "fulltext", None) or "" if extract_fulltext else "",
+                            "fulltextSource": getattr(item, "fulltext_source", None) or "" if extract_fulltext else "",
                             # Flag if extraction was attempted but failed (timeout, empty)
-                            "fulltext_attempted": getattr(item, '_fulltext_attempted', False),
+                            "fulltext_attempted": getattr(item, "_fulltext_attempted", False),
                             "dateAdded": item.date_added,
                             "dateModified": item.date_modified,
-                            "creators": self._parse_creators_string(item.creators) if item.creators else []
-                        }
+                            "creators": self._parse_creators_string(item.creators) if item.creators else [],
+                        },
                     }
 
                     # Add notes if available
@@ -788,23 +802,16 @@ class ZoteroSemanticSearch:
             return []
 
         creators = []
-        for creator in creators_str.split(';'):
+        for creator in creators_str.split(";"):
             creator = creator.strip()
             if not creator:
                 continue
 
-            if ',' in creator:
-                last, first = creator.split(',', 1)
-                creators.append({
-                    "creatorType": "author",
-                    "firstName": first.strip(),
-                    "lastName": last.strip()
-                })
+            if "," in creator:
+                last, first = creator.split(",", 1)
+                creators.append({"creatorType": "author", "firstName": first.strip(), "lastName": last.strip()})
             else:
-                creators.append({
-                    "creatorType": "author",
-                    "name": creator
-                })
+                creators.append({"creatorType": "author", "name": creator})
 
         return creators
 
@@ -825,6 +832,7 @@ class ZoteroSemanticSearch:
             text (e.g. "web-api:parent", "web-api:attachment:<key>"). Empty
             strings mean no fulltext is available for this item.
         """
+
         def _extract_content(resp: Any) -> str:
             if isinstance(resp, dict):
                 return str(resp.get("content", "") or "")
@@ -897,10 +905,7 @@ class ZoteroSemanticSearch:
                 data["fulltext_attempted"] = True
             if idx % 25 == 0 or idx == total:
                 try:
-                    sys.stderr.write(
-                        f"\r  Fulltext: {idx}/{total} items checked, "
-                        f"{fetched} with text"
-                    )
+                    sys.stderr.write(f"\r  Fulltext: {idx}/{total} items checked, {fetched} with text")
                     sys.stderr.flush()
                 except Exception:
                     pass
@@ -909,9 +914,7 @@ class ZoteroSemanticSearch:
         except Exception:
             pass
 
-    def _get_items_from_api(self,
-                            limit: int | None = None,
-                            include_fulltext: bool = False) -> list[dict[str, Any]]:
+    def _get_items_from_api(self, limit: int | None = None, include_fulltext: bool = False) -> list[dict[str, Any]]:
         """
         Get items from Zotero API (original implementation).
 
@@ -955,8 +958,7 @@ class ZoteroSemanticSearch:
 
             # Filter out attachments and notes by default
             filtered_items = [
-                item for item in items
-                if item.get("data", {}).get("itemType") not in ["attachment", "note"]
+                item for item in items if item.get("data", {}).get("itemType") not in ["attachment", "note"]
             ]
 
             all_items.extend(filtered_items)
@@ -974,10 +976,9 @@ class ZoteroSemanticSearch:
         logger.info(f"Retrieved {len(all_items)} items from API")
         return all_items
 
-    def _get_changed_items_from_api(self,
-                                    since_version: int,
-                                    include_fulltext: bool = False
-                                    ) -> tuple[list[dict[str, Any]], set[str]]:
+    def _get_changed_items_from_api(
+        self, since_version: int, include_fulltext: bool = False
+    ) -> tuple[list[dict[str, Any]], set[str]]:
         """Fetch only items changed in the Zotero library since a given version.
 
         Uses pyzotero's `item_versions(since=V)` to discover changed top-level
@@ -1027,11 +1028,13 @@ class ZoteroSemanticSearch:
 
         return changed_items, current_keys
 
-    def update_database(self,
-                       force_full_rebuild: bool = False,
-                       limit: int | None = None,
-                       extract_fulltext: bool = False,
-                       include_fulltext: bool | None = None) -> dict[str, Any]:
+    def update_database(
+        self,
+        force_full_rebuild: bool = False,
+        limit: int | None = None,
+        extract_fulltext: bool = False,
+        include_fulltext: bool | None = None,
+    ) -> dict[str, Any]:
         """
         Update the semantic search database with Zotero items.
 
@@ -1062,7 +1065,7 @@ class ZoteroSemanticSearch:
             "deleted_items": 0,
             "errors": 0,
             "start_time": start_time.isoformat(),
-            "duration": None
+            "duration": None,
         }
 
         # Guard against concurrent rebuilds: the MCP server auto-launches
@@ -1075,8 +1078,7 @@ class ZoteroSemanticSearch:
         if not acquired:
             lock_cm.__exit__(None, None, None)
             logger.warning(
-                "Another semantic-search update is already running "
-                "(lock held at %s); skipping this invocation.",
+                "Another semantic-search update is already running (lock held at %s); skipping this invocation.",
                 lock_path,
             )
             stats["duration"] = "0:00:00"
@@ -1103,10 +1105,7 @@ class ZoteroSemanticSearch:
             # fulltext only), not a test limit, and a known prior sync version.
             last_sync_version = self._load_last_sync_version() if not force_full_rebuild else 0
             use_incremental = (
-                not force_full_rebuild
-                and not extract_fulltext
-                and limit is None
-                and last_sync_version > 0
+                not force_full_rebuild and not extract_fulltext and limit is None and last_sync_version > 0
             )
 
             target_sync_version: int | None = None
@@ -1122,8 +1121,7 @@ class ZoteroSemanticSearch:
                 # No changes since last sync; skip ingest but still touch last_update
                 try:
                     sys.stderr.write(
-                        f"\nLibrary unchanged since last sync (version {last_sync_version}); "
-                        f"no items to reindex.\n"
+                        f"\nLibrary unchanged since last sync (version {last_sync_version}); no items to reindex.\n"
                     )
                 except Exception:
                     pass
@@ -1147,9 +1145,7 @@ class ZoteroSemanticSearch:
                         self.chroma_client.delete_documents(to_delete)
                         stats["deleted_items"] = len(to_delete)
                         try:
-                            sys.stderr.write(
-                                f"\nDeleted {len(to_delete)} items no longer present in Zotero.\n"
-                            )
+                            sys.stderr.write(f"\nDeleted {len(to_delete)} items no longer present in Zotero.\n")
                         except Exception:
                             pass
                 except Exception as e:
@@ -1179,7 +1175,7 @@ class ZoteroSemanticSearch:
             stats["total_items"] = len(all_items)
             logger.info(f"Found {stats['total_items']} items to process")
             # User-friendly progress reporting
-            total = stats['total_items'] = len(all_items)
+            total = stats["total_items"] = len(all_items)
             try:
                 sys.stderr.write(f"\nIndexing {total} items...\n\n")
                 sys.stderr.flush()
@@ -1193,7 +1189,7 @@ class ZoteroSemanticSearch:
             seen_items = 0
             _failed_docs = []  # Collect failures for end-of-run retry
             for i in range(0, len(all_items), batch_size):
-                batch = all_items[i:i + batch_size]
+                batch = all_items[i : i + batch_size]
 
                 # Show per-item progress within this batch
                 for item in batch:
@@ -1216,7 +1212,9 @@ class ZoteroSemanticSearch:
                 stats["skipped_items"] += batch_stats["skipped"]
                 stats["errors"] += batch_stats["errors"]
 
-                logger.info(f"Processed {seen_items}/{total} items (added: {stats['added_items']}, skipped: {stats['skipped_items']})")
+                logger.info(
+                    f"Processed {seen_items}/{total} items (added: {stats['added_items']}, skipped: {stats['skipped_items']})"
+                )
 
             # Retry any documents that failed during the main run
             if _failed_docs:
@@ -1227,6 +1225,7 @@ class ZoteroSemanticSearch:
                     pass
 
                 import time as _retry_time
+
                 _retry_time.sleep(1)  # Brief pause before retry
 
                 retry_ok = 0
@@ -1373,10 +1372,7 @@ class ZoteroSemanticSearch:
 
         return stats
 
-    def search(self,
-               query: str,
-               limit: int = 10,
-               filters: dict[str, Any] | None = None) -> dict[str, Any]:
+    def search(self, query: str, limit: int = 10, filters: dict[str, Any] | None = None) -> dict[str, Any]:
         """
         Perform semantic search over the Zotero library.
 
@@ -1397,11 +1393,7 @@ class ZoteroSemanticSearch:
                 fetch_limit = limit * multiplier
 
             # Perform semantic search
-            results = self.chroma_client.search(
-                query_texts=[query],
-                n_results=fetch_limit,
-                where=filters
-            )
+            results = self.chroma_client.search(query_texts=[query], n_results=fetch_limit, where=filters)
 
             # Re-rank results with cross-encoder if enabled
             if reranker and results.get("documents") and results["documents"][0]:
@@ -1419,7 +1411,7 @@ class ZoteroSemanticSearch:
                 "limit": limit,
                 "filters": filters,
                 "results": enriched_results,
-                "total_found": len(enriched_results)
+                "total_found": len(enriched_results),
             }
 
         except Exception as e:
@@ -1430,7 +1422,7 @@ class ZoteroSemanticSearch:
                 "filters": filters,
                 "results": [],
                 "total_found": 0,
-                "error": str(e)
+                "error": str(e),
             }
 
     def _enrich_search_results(self, chroma_results: dict[str, Any], query: str) -> list[dict[str, Any]]:
@@ -1456,7 +1448,7 @@ class ZoteroSemanticSearch:
                     "matched_text": documents[i] if i < len(documents) else "",
                     "metadata": metadatas[i] if i < len(metadatas) else {},
                     "zotero_item": zotero_item,
-                    "query": query
+                    "query": query,
                 }
 
                 enriched.append(enriched_result)
@@ -1464,14 +1456,16 @@ class ZoteroSemanticSearch:
             except Exception as e:
                 logger.error(f"Error enriching result for item {item_key}: {e}")
                 # Include basic result even if enrichment fails
-                enriched.append({
-                    "item_key": item_key,
-                    "similarity_score": 1 - distances[i] if i < len(distances) else 0,
-                    "matched_text": documents[i] if i < len(documents) else "",
-                    "metadata": metadatas[i] if i < len(metadatas) else {},
-                    "query": query,
-                    "error": f"Could not fetch full item data: {e}"
-                })
+                enriched.append(
+                    {
+                        "item_key": item_key,
+                        "similarity_score": 1 - distances[i] if i < len(distances) else 0,
+                        "matched_text": documents[i] if i < len(documents) else "",
+                        "metadata": metadatas[i] if i < len(metadatas) else {},
+                        "query": query,
+                        "error": f"Could not fetch full item data: {e}",
+                    }
+                )
 
         return enriched
 
