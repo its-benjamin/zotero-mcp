@@ -93,7 +93,7 @@ This is a heavily enhanced fork of [54yyyu/zotero-mcp](https://github.com/54yyyu
 
 ### 🧠 AI-Powered Semantic Search
 - **Vector-based similarity search** over your entire research library (requires `[semantic]` extra)
-- **Multiple embedding models**: Default (free, local), OpenAI, Gemini, Voyage AI, OpenRouter, and any HuggingFace Hub model
+- **Multiple embedding models**: Default (free, local), OpenAI, Gemini, Voyage AI, OpenRouter, Ollama, and any HuggingFace Hub model
 - **Intelligent results** with similarity scores and contextual matching
 - **Auto-updating database** with configurable sync schedules
 
@@ -231,6 +231,7 @@ zotero-mcp setup --semantic-config-only
 - **Gemini**: Better quality, requires API key (`gemini-embedding-001`)
 - **Voyage AI**: Better retrieval quality, requires API key (`voyage-4-lite`)
 - **OpenRouter**: OpenAI-compatible router supporting many models, requires API key (default: `openai/text-embedding-3-small`)
+- **Ollama**: Runs locally via Ollama API (requires model name, e.g., `nomic-embed-text` or `bge-m3`)
 - **Local HuggingFace**: Run any sentence-transformers model locally (e.g., `intfloat/e5-small-v2`, `BAAI/bge-small-en-v1.5`)
 
 OpenRouter uses the OpenAI-compatible `/embeddings` endpoint at `https://openrouter.ai/api/v1` and is a remote provider; it is not part of local-only mode. Example config:
@@ -249,6 +250,26 @@ OpenRouter uses the OpenAI-compatible `/embeddings` endpoint at `https://openrou
 
 For local/private embeddings, set `embedding_model` directly to a HuggingFace Hub model name such as `intfloat/e5-small-v2`, `BAAI/bge-small-en-v1.5`, or `Qwen/Qwen3-Embedding-0.6B`. The first run downloads model weights locally.
 
+**Using Ollama embeddings:**
+
+Install and start Ollama, then pull an embedding model before running `zotero-mcp update-db`:
+
+```bash
+ollama serve
+
+# Small model: fast and lightweight
+ollama pull nomic-embed-text
+
+# Medium model: better multilingual retrieval quality
+ollama pull bge-m3
+```
+
+When prompted by `zotero-mcp setup --semantic-config-only`, choose **Ollama** and use either `nomic-embed-text` or `bge-m3` as the model name.
+
+When you choose OpenAI, setup also asks whether database updates should use
+OpenAI Batch API. Batch updates are cheaper for large libraries, but they are
+asynchronous: submit the batch, wait for completion, then import the embeddings.
+
 Changing `embedding_model` resets the semantic index model metadata. Rebuild with `zotero-mcp update-db --force-rebuild` after switching providers or model names.
 
 **Update Frequency Options:**
@@ -264,6 +285,16 @@ After setup, initialize your search database:
 ```bash
 # Build the semantic search database (fast, metadata-only)
 zotero-mcp update-db
+
+# Submit OpenAI embeddings through Batch API for this update
+zotero-mcp update-db --openai-batch
+
+# Check and import completed OpenAI Batch API embeddings
+zotero-mcp openai-batch-status
+zotero-mcp openai-batch-import
+
+# Force realtime OpenAI embeddings even if Batch API is enabled in config
+zotero-mcp update-db --no-openai-batch
 
 # Build with full-text extraction (slower, more comprehensive)
 zotero-mcp update-db --fulltext
@@ -315,7 +346,17 @@ Full documentation for this fork is available in this README and [Getting Starte
 
 **For ChatGPT setup: see the [Getting Started guide](./docs/getting-started.md).**
 
-### For Claude Desktop (example MCP client)
+### Configure Zotero
+
+The Zotero local API must be enabled for the MCP server to work.
+
+In Zotero 9, the local API toggle is under Settings → Advanced → 'Allow other applications on this computer to communicate with Zotero'.
+
+Here is a screenshot:
+
+![Zotero local API](./docs/zotero-local-api.png)
+
+### For Claude Desktop / Claude Code (MCP client)
 
 #### Configuration
 After installation, either:
@@ -326,7 +367,8 @@ After installation, either:
    ```
 
 2. **Manual configuration**:
-   Add to your `claude_desktop_config.json`:
+   For Claude Desktop, add this to `claude_desktop_config.json`.
+   For Claude Code, add this to `~/.claude.json`:
    ```json
    {
      "mcpServers": {
@@ -342,24 +384,27 @@ After installation, either:
    }
    ```
 
-   For **local read-only use**, `ZOTERO_LOCAL: "true"` is all you need — drop the
-   `ZOTERO_API_KEY` and `ZOTERO_LIBRARY_ID` lines entirely. Add them only to enable
-   **write mode**: the local API is fast but read-only, so the server uses the Zotero
-   web API for write operations.
+   For **local read-only use**, `ZOTERO_LOCAL: "true"` is all you need — drop the `ZOTERO_API_KEY` and `ZOTERO_LIBRARY_ID` lines entirely.
 
-   - Generate an API key from <https://www.zotero.org/settings/security#applications>.
-   - `ZOTERO_LIBRARY_ID` is your numeric **userID**, shown on that same page (for a
-     group library, use the group's ID and also set `ZOTERO_LIBRARY_TYPE: "group"`).
+   The local API is fast but read-only, so the MCP server uses the Zotero web API for write operations.
+   
+   To enable **write mode**:
+   - Keep `ZOTERO_LOCAL: "true"` — with API credentials set, the server runs in hybrid mode (fast local reads, web API writes)
+   - Click [here](https://www.zotero.org/settings/security#applications) to generate a Zotero API key and replace `YOUR_API_KEY` with it
+   - `ZOTERO_LIBRARY_ID` is your numeric **userID**, shown on that same page (for a group library, use the group's ID and also set `ZOTERO_LIBRARY_TYPE: "group"`).
 
-   > **Tip:** if Claude Desktop reports it can't find the `zotero-mcp` command, use the
+   > **Important Note**: Environmental variables set in the shell you run `claude` in will override these values.
+
+   > **Tip:** If Claude Desktop reports it can't find the `zotero-mcp` command, use the
    > absolute path instead (run `zotero-mcp setup-info` or `which zotero-mcp` to find it) —
    > GUI apps don't always inherit your shell `PATH`.
 
 #### Usage
 
 1. Start Zotero desktop (make sure local API is enabled in preferences)
-2. Launch Claude Desktop
-3. Access the Zotero-MCP tool through Claude Desktop's tools interface
+2. Launch Claude Desktop / Claude Code
+3. For Claude Desktop, access the Zotero-MCP tool through Claude Desktop's tools interface.
+For Claude Code, run the `/mcp` command, and make sure the Zotero MCP server is connected.
 
 Example prompts:
 - "Search my library for papers on machine learning"
@@ -373,6 +418,16 @@ Example prompts:
 - **"Find papers conceptually similar to deep learning in computer vision"** *(semantic search)*
 - **"Research that relates to the intersection of AI and healthcare"** *(semantic search)*
 - **"Papers that discuss topics similar to this abstract: [paste text]"** *(semantic search)*
+
+### For Autohand Code
+
+After installing Zotero MCP, add a local read-only server with:
+
+```bash
+autohand mcp add zotero env ZOTERO_LOCAL=true zotero-mcp
+```
+
+Add `--scope project` after `add` to keep the server configuration in the current project. For hybrid or web API access, add the credentials described above to the `env` command. See [Autohand Code](https://github.com/autohandai/code-cli/) for current installation and CLI details.
 
 ### For Cherry Studio
 
@@ -422,10 +477,12 @@ zotero-mcp setup --no-local --api-key YOUR_API_KEY --library-id YOUR_LIBRARY_ID
 - `ZOTERO_WEBDAV_PASSWORD`: Optional WebDAV password
 
 **Semantic Search:**
-- `ZOTERO_EMBEDDING_MODEL`: Embedding model to use (`default`, `openai`, `gemini`, `voyage`, `openrouter`, or any HuggingFace Hub model name like `intfloat/e5-small-v2`)
+- `ZOTERO_EMBEDDING_MODEL`: Embedding model to use (`default`, `openai`, `gemini`, `voyage`, `openrouter`, `ollama`, or any HuggingFace Hub model name like `intfloat/e5-small-v2`)
 - `OPENAI_API_KEY`: Your OpenAI API key (for OpenAI embeddings)
 - `OPENAI_EMBEDDING_MODEL`: OpenAI model name (text-embedding-3-small, text-embedding-3-large)
 - `OPENAI_BASE_URL`: Custom OpenAI endpoint URL (optional, for use with compatible APIs)
+- OpenAI Batch API indexing is configured by `zotero-mcp setup` and can be overridden with
+  `zotero-mcp update-db --openai-batch` or `--no-openai-batch`
 - `GEMINI_API_KEY`: Your Gemini API key (for Gemini embeddings)
 - `GEMINI_EMBEDDING_MODEL`: Gemini model name (gemini-embedding-001)
 - `GEMINI_BASE_URL`: Custom Gemini endpoint URL (optional, for use with compatible APIs)
@@ -439,7 +496,12 @@ zotero-mcp setup --no-local --api-key YOUR_API_KEY --library-id YOUR_LIBRARY_ID
 - `OPENROUTER_API_KEY`: Your OpenRouter API key (for OpenRouter embeddings)
 - `OPENROUTER_EMBEDDING_MODEL`: OpenRouter model name (default: `openai/text-embedding-3-small`)
 - `OPENROUTER_BASE_URL`: Custom OpenRouter endpoint URL (default: `https://openrouter.ai/api/v1`)
-- `ZOTERO_DB_PATH`: Custom `zotero.sqlite` path (optional)
+- `OLLAMA_EMBEDDING_MODEL`: Ollama embedding model name (qwen3-embedding by default)
+- `OLLAMA_BASE_URL`: Ollama server URL (default: http://localhost:11434)
+- `ZOTERO_DB_PATH`: Custom `zotero.sqlite` path (optional). When unset, the
+  database is located automatically: a data directory configured in Zotero's
+  preferences (read from the profile's `prefs.js`) is tried first, then the
+  default `~/Zotero` location.
 
 **API Rate Limits:**
 External API calls are throttled by provider instead of being fired in a burst. Defaults are conservative and can be overridden with `ZOTERO_MCP_RATE_<PROVIDER>_REQUESTS` and `ZOTERO_MCP_RATE_<PROVIDER>_WINDOW_SECONDS`, where provider is one of `ZOTERO`, `CROSSREF`, `ARXIV`, `UNPAYWALL`, `SEMANTIC_SCHOLAR`, `PMC`, `SCITE`, `OPENAI`, `GEMINI`, or `VOYAGE`.
@@ -466,6 +528,10 @@ zotero-mcp update --force                  # Force update even if up to date
 
 # Semantic search database management
 zotero-mcp update-db                       # Update semantic search database (fast, metadata-only)
+zotero-mcp update-db --openai-batch        # Submit OpenAI embeddings through Batch API
+zotero-mcp update-db --no-openai-batch     # Force realtime OpenAI embeddings for this run
+zotero-mcp openai-batch-status             # Check latest OpenAI embedding batch status
+zotero-mcp openai-batch-import             # Import completed OpenAI batch embeddings
 zotero-mcp update-db --fulltext             # Update with full-text extraction (comprehensive but slower)
 zotero-mcp update-db --force-rebuild       # Force complete database rebuild
 zotero-mcp update-db --fulltext --force-rebuild  # Rebuild with full-text extraction
@@ -513,7 +579,27 @@ zotero-cli ann search "highlight text"
 # Add items
 zotero-cli add doi 10.1038/s41586-021-03819-2
 zotero-cli add url https://arxiv.org/abs/2301.00001
-zotero-cli add file /path/to/paper.pdf
+zotero-cli add file --filepath /path/to/paper.pdf --title "Override Title"
+zotero-cli add isbn 9780262046305
+zotero-cli add bibtex --file refs.bib                # or --bibtex '@article{...}'
+zotero-cli add bibtex --bibtex - < refs.bib          # stdin via -
+zotero-cli add csl-json --file refs.json             # or --json '...' / --json -
+
+# --collections accepts keys, names, or parent/child paths — resolved and
+# validated before the item is created (a typo fails the add, with suggestions,
+# instead of leaving an unfiled item)
+zotero-cli add doi 10.1038/s41586-021-03819-2 --collections "Reading List"
+zotero-cli collections manage --item-keys ABC123 --add-to "_project/topic"
+
+# Adds are idempotent by default (--if-exists file): if the item is already in
+# the library it is reused — filed into any missing collections, given any
+# missing tags — instead of duplicated. Re-running the same command is a no-op.
+zotero-cli add doi 10.1038/s41586-021-03819-2 -c "Reading List"   # run it twice: converges
+zotero-cli add doi 10.1038/s41586-021-03819-2 --if-exists skip       # never touch existing
+zotero-cli add doi 10.1038/s41586-021-03819-2 --if-exists duplicate  # old behavior
+zotero-cli add doi 10.1038/s41586-021-03819-2 -c "New Topic" --create-collections
+# -c/--collection is repeatable and never comma-split (names with commas work);
+# --collections remains the comma-separated form
 
 # Collections and tags
 zotero-cli coll list                          # list collections (short alias)
@@ -620,10 +706,15 @@ zotero_remove_item_relation(
 ### 📦 Item & Collection Management Tools
 - `zotero_add_by_doi`: Add a paper by DOI with automatic metadata and open-access PDF attachment
 - `zotero_add_by_url`: Add a paper by URL (arXiv, DOI URLs, and general webpages)
+- `zotero_add_by_isbn`: Add a book by ISBN (Open Library + Google Books cascade)
+- `zotero_add_by_bibtex`: Add one or more items from BibTeX (inline or .bib file)
+- `zotero_add_by_csl_json`: Add one or more items from CSL JSON (inline or file)
 - `zotero_add_from_file`: Import a local PDF or EPUB file with automatic DOI extraction
+
+All add tools take a `collections` parameter accepting collection keys, names, or `parent/child` paths — resolved and validated before the item is created, so unknown or ambiguous specs fail with suggestions instead of producing an unfiled item. They also take `if_exists` (`"duplicate"` — default — always creates; `"file"` reuses an existing item matching the DOI/arXiv ID/ISBN/URL, filing it into missing collections and adding missing tags; `"skip"` leaves a match untouched) and `create_missing_collections` (create unknown collection specs, including path chains, instead of failing). The `zotero-cli add` commands default to `--if-exists file`.
 - `zotero_create_collection`: Create a new collection (folder/project) in your library
 - `zotero_search_collections`: Search for collections by name to find their keys
-- `zotero_manage_collections`: Add or remove items from collections
+- `zotero_manage_collections`: Add or remove items from collections (accepts keys, names, or `parent/child` paths)
 - `zotero_update_item`: Update metadata for an existing item (title, tags, abstract, date, etc.)
 - `zotero_find_duplicates`: Find duplicate items by title and/or DOI
 - `zotero_merge_duplicates`: Merge duplicate items with dry-run preview; consolidates all child items

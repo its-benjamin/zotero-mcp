@@ -95,10 +95,13 @@ from zotero_mcp.tools.search import (  # noqa: F401
     update_search_database,
 )
 from zotero_mcp.tools.write import (  # noqa: F401
+    add_by_bibtex,
+    add_by_csl_json,
     add_by_doi,
     add_by_isbn,
     add_by_url,
     add_from_file,
+    batch_update_extra,
     batch_update_tags,
     create_collection,
     delete_collection,

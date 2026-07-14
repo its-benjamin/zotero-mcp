@@ -111,7 +111,7 @@ def get_papers_batch(dois: list[str]) -> dict[str, dict]:
         resp = rate_limited_post(
             "scite",
             f"{_BASE}/papers",
-            json={"dois": dois[:500]},
+            json=dois[:500],
             headers=_HEADERS,
             timeout=_TIMEOUT,
         )

@@ -437,7 +437,7 @@ class TestManageCollections:
         since the version number must match the server the write goes to."""
         read_zot = FakeZoteroCollections()
         read_zot._collections = [
-            {"key": "COL001", "data": {"name": "Test", "parentCollection": False}},
+            {"key": "COL00001", "data": {"name": "Test", "parentCollection": False}},
         ]
         write_zot = FakeZoteroCollections()
         write_zot._items = [
@@ -452,7 +452,7 @@ class TestManageCollections:
 
         await server.manage_collections(
             item_keys=["ITEM0001"],
-            add_to=["COL001"],
+            add_to=["COL00001"],
             ctx=ctx,
         )
 
@@ -486,20 +486,34 @@ class TestManageCollections:
 
     @pytest.mark.asyncio
     async def test_collection_name_resolution_in_add_to(self, monkeypatch, fake_zot, ctx):
-        """add_to values are passed directly as collection keys (no name resolution).
-        The implementation uses _normalize_str_list_input, not _resolve_collection_names."""
+        """add_to values may be collection NAMES — resolved to keys before
+        any filing happens (resolve_collection_specs)."""
         _patch_web_only(monkeypatch, fake_zot)
 
-        await server.manage_collections(
+        result = await server.manage_collections(
             item_keys=["ITEM0001"],
             add_to=["NLP Papers"],
             ctx=ctx,
         )
 
-        # The value is passed through as-is (not resolved to a key)
-        if fake_zot.added_to_collections:
-            coll_key, _ = fake_zot.added_to_collections[0]
-            assert coll_key == "NLP Papers"
+        assert fake_zot.added_to_collections, f"nothing filed: {result}"
+        coll_key, _ = fake_zot.added_to_collections[0]
+        assert coll_key == "ABC00003"
+
+    @pytest.mark.asyncio
+    async def test_collection_path_resolution_in_add_to(self, monkeypatch, fake_zot, ctx):
+        """A 'parent/child' path disambiguates nested collections."""
+        _patch_web_only(monkeypatch, fake_zot)
+
+        result = await server.manage_collections(
+            item_keys=["ITEM0001"],
+            add_to=["Machine Learning/Deep Learning"],
+            ctx=ctx,
+        )
+
+        assert fake_zot.added_to_collections, f"nothing filed: {result}"
+        coll_key, _ = fake_zot.added_to_collections[0]
+        assert coll_key == "ABC00002"
 
     @pytest.mark.asyncio
     async def test_multiple_items_batched(self, monkeypatch, fake_zot, ctx):

@@ -340,7 +340,127 @@ class TestArxivErrors:
             )
 
         assert patch_write_client.created == []
-        assert "error" in result.lower() or "timeout" in result.lower()
+        assert (
+            "error" in result.lower()
+            or "timeout" in result.lower()
+            or "unreachable" in result.lower()
+        )
+
+
+class TestArxivCrossrefFallback:
+    """When arXiv (export.arxiv.org) is overloaded, _add_by_arxiv should fall
+    back to CrossRef via the arXiv DOI (10.48550/arXiv.{id}) — independent
+    infrastructure — rather than failing. Regression coverage for graceful
+    degradation during arXiv outages.
+    """
+
+    @pytest.mark.asyncio
+    async def test_timeout_falls_back_to_crossref(self, dummy_ctx, patch_write_client):
+        """arXiv timeout → delegate to add_by_doi with the arXiv DOI; surface its result."""
+        import requests as req_lib
+
+        fake_zot = patch_write_client
+        fake_zot._collections = [
+            {"key": "ABC12345", "data": {"name": "Preprints", "parentCollection": False}},
+        ]
+        with (
+            patch("zotero_mcp.tools.write.asyncio.sleep"),
+            patch(
+                "zotero_mcp.tools.write.rate_limited_get",
+                side_effect=req_lib.exceptions.Timeout("timed out"),
+            ),
+            patch(
+                "zotero_mcp.tools.write.add_by_doi",
+                return_value="Successfully added: **Attention Is All You Need**",
+            ) as mock_doi,
+        ):
+            result = await server.add_by_url(
+                url="https://arxiv.org/abs/2401.00001",
+                collections=["ABC12345"],
+                tags=["t1"],
+                ctx=dummy_ctx,
+            )
+
+        # Fallback fired with the arXiv DOI and forwarded the resolved
+        # collection keys and tags.
+        mock_doi.assert_called_once()
+        kwargs = mock_doi.call_args.kwargs
+        assert kwargs.get("doi") == "10.48550/arXiv.2401.00001"
+        assert kwargs.get("collections") == ["ABC12345"]
+        assert kwargs.get("tags") == ["t1"]
+        # The successful CrossRef result is surfaced to the caller.
+        assert "Successfully added" in result
+
+    @pytest.mark.asyncio
+    async def test_503_falls_back_to_crossref(self, dummy_ctx, patch_write_client):
+        """A persistent 5xx from arXiv should also trigger the CrossRef fallback."""
+        mock_resp = _make_arxiv_response("", status_code=503)
+
+        with (
+            patch("zotero_mcp.tools.write.asyncio.sleep"),
+            patch("zotero_mcp.tools.write.rate_limited_get", return_value=mock_resp),
+            patch(
+                "zotero_mcp.tools.write.add_by_doi",
+                return_value="Successfully added: **Paper**",
+            ) as mock_doi,
+        ):
+            result = await server.add_by_url(
+                url="https://arxiv.org/abs/2401.00001",
+                ctx=dummy_ctx,
+            )
+
+        mock_doi.assert_called_once()
+        assert mock_doi.call_args.kwargs.get("doi") == "10.48550/arXiv.2401.00001"
+        assert "Successfully added" in result
+
+    @pytest.mark.asyncio
+    async def test_both_routes_fail_returns_actionable_message(self, dummy_ctx, patch_write_client):
+        """arXiv down AND CrossRef miss → a clear retry message, nothing created, no raise."""
+        import requests as req_lib
+
+        with (
+            patch("zotero_mcp.tools.write.asyncio.sleep"),
+            patch(
+                "zotero_mcp.tools.write.rate_limited_get",
+                side_effect=req_lib.exceptions.ConnectionError("conn refused"),
+            ),
+            patch(
+                "zotero_mcp.tools.write.add_by_doi",
+                return_value="DOI not found on CrossRef: 10.48550/arXiv.2401.00001",
+            ),
+        ):
+            result = await server.add_by_url(
+                url="https://arxiv.org/abs/2401.00001",
+                ctx=dummy_ctx,
+            )
+
+        assert patch_write_client.created == []
+        assert "unreachable" in result.lower()
+        assert "retry" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_crossref_fallback_exception_is_caught(self, dummy_ctx, patch_write_client):
+        """If the fallback itself raises, _add_by_arxiv must not propagate it."""
+        import requests as req_lib
+
+        with (
+            patch("zotero_mcp.tools.write.asyncio.sleep"),
+            patch(
+                "zotero_mcp.tools.write.rate_limited_get",
+                side_effect=req_lib.exceptions.Timeout("timed out"),
+            ),
+            patch(
+                "zotero_mcp.tools.write.add_by_doi",
+                side_effect=RuntimeError("crossref blew up"),
+            ),
+        ):
+            result = await server.add_by_url(
+                url="https://arxiv.org/abs/2401.00001",
+                ctx=dummy_ctx,
+            )
+
+        assert patch_write_client.created == []
+        assert "unreachable" in result.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -509,6 +629,9 @@ class TestTagsAndCollections:
     async def test_collections_applied(self, dummy_ctx, patch_write_client):
         """Collections parameter should set the item's collections field."""
         fake_zot = patch_write_client
+        fake_zot._collections = [
+            {"key": "ABC12345", "data": {"name": "Preprints", "parentCollection": False}},
+        ]
         mock_resp = _make_arxiv_response(ARXIV_ATOM_XML)
 
         with patch("zotero_mcp.tools.write.rate_limited_get", return_value=mock_resp):
@@ -523,9 +646,9 @@ class TestTagsAndCollections:
 
     @pytest.mark.asyncio
     async def test_collection_names_resolved(self, dummy_ctx, patch_write_client):
-        """Collection names passed as collections are used as-is (keys or names).
-        The arXiv flow passes them through _normalize_str_list_input, not
-        _resolve_collection_names, so names appear directly in collections."""
+        """Collection NAMES resolve to keys before the item is created —
+        the arXiv flow goes through resolve_collection_specs like every
+        other add path."""
         fake_zot = patch_write_client
         fake_zot._collections = [
             {"key": "COLL0001", "data": {"name": "My Papers"}},
@@ -541,8 +664,7 @@ class TestTagsAndCollections:
             )
 
         item = fake_zot.created[0]
-        # The name is passed through _normalize_str_list_input (not resolved to key)
-        assert "My Papers" in item.get("collections", [])
+        assert item.get("collections") == ["COLL0001"]
 
     @pytest.mark.asyncio
     async def test_no_tags_or_collections(self, dummy_ctx, patch_write_client):

@@ -32,10 +32,15 @@ class TestManageCollectionsPayloadShape:
                 return _FakeResponse(204)
 
         fake = FakeZotManage()
+        fake._collections = [
+            {"key": "COL00001", "data": {"name": "Test Collection", "parentCollection": False}},
+        ]
         monkeypatch.setattr("zotero_mcp.tools._helpers._get_write_client", lambda ctx: (fake, fake))
 
         ctx = DummyContext()
-        await server.manage_collections(item_keys=["ITEM01"], add_to=["COL01"], ctx=ctx)
+        await server.manage_collections(
+            item_keys=["ITEM01"], add_to=["COL00001"], ctx=ctx
+        )
 
         assert len(received) == 1
         # Must be a dict, NOT a list wrapping a dict

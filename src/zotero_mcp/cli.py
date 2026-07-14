@@ -143,6 +143,101 @@ def _save_zotero_db_path_to_config(config_path: Path, db_path: str) -> None:
         print(f"Warning: Could not save db_path to config: {e}")
 
 
+def _semantic_config_path(path_arg: str | None) -> Path:
+    return Path(path_arg) if path_arg else Path.home() / ".config" / "zotero-mcp" / "config.json"
+
+
+def _warmup_reranker_in_background() -> None:
+    """Preload the reranker (if enabled) off the request path — see issue #283.
+
+    Runs in a daemon thread so server startup is never delayed and a failed or
+    slow model load can never crash the server. No-op when the optional
+    ``[semantic]`` extra isn't installed or the reranker is disabled.
+    """
+    import threading
+
+    def _run() -> None:
+        try:
+            from zotero_mcp.semantic_search import warmup_reranker
+        except Exception:
+            return  # semantic extra not installed
+        try:
+            config_path = str(_semantic_config_path(None))
+            if warmup_reranker(config_path):
+                print("Reranker warmed up.", file=sys.stderr)
+        except Exception:
+            pass  # best-effort: never let warmup break serving
+
+    threading.Thread(target=_run, daemon=True, name="zmcp-reranker-warmup").start()
+
+
+def _print_update_stats(stats: dict) -> None:
+    is_batch = stats.get("batch_mode") or stats.get("batch_submitted")
+    label = "OpenAI batch submission" if is_batch else "Database update"
+    outcome = "failed" if stats.get("error") else "completed"
+    print(f"\n{label} {outcome}:")
+    print(f"- Total items: {stats.get('total_items', 0)}")
+    print(f"- Processed: {stats.get('processed_items', 0)}")
+    if stats.get("batch_submitted"):
+        print(f"- Submitted: {stats.get('submitted_items', 0)}")
+        print(f"- Estimated new items: {stats.get('estimated_added_items', 0)}")
+        print(f"- Estimated existing items: {stats.get('estimated_updated_items', 0)}")
+    else:
+        print(f"- Added: {stats.get('added_items', 0)}")
+        print(f"- Updated: {stats.get('updated_items', 0)}")
+    print(f"- Skipped: {stats.get('skipped_items', 0)}")
+    print(f"- Errors: {stats.get('errors', 0)}")
+    print(f"- Duration: {stats.get('duration', 'Unknown')}")
+    if stats.get("batch_submitted"):
+        print(f"- Batch run: {stats.get('batch_run_id')}")
+        print(f"- Manifest: {stats.get('batch_manifest')}")
+        for batch_id in stats.get("batch_ids", []):
+            print(f"- Batch ID: {batch_id}")
+        print("\nNext steps:")
+        print("  zotero-mcp openai-batch-status")
+        print("  zotero-mcp openai-batch-import")
+
+
+def _print_batch_status(status: dict) -> None:
+    print("=== OpenAI Batch Status ===")
+    print(f"Run: {status.get('run_id')}")
+    print(f"Model: {status.get('model')}")
+    print(f"Manifest: {status.get('manifest_path')}")
+    print(f"Force rebuild: {status.get('force_full_rebuild', False)}")
+    for batch in status.get("batches", []):
+        counts = batch.get("request_counts") or {}
+        if not isinstance(counts, dict):
+            counts = {}
+        print()
+        print(f"Batch: {batch.get('batch_id')}")
+        print(f"- Status: {batch.get('status')}")
+        print(f"- Requests: {batch.get('request_count', counts.get('total', 'Unknown'))}")
+        if counts:
+            print(f"- Completed: {counts.get('completed', 0)}")
+            print(f"- Failed: {counts.get('failed', 0)}")
+        print(f"- Imported: {batch.get('imported_at') or 'No'}")
+
+
+def _print_batch_import(stats: dict) -> None:
+    print("=== OpenAI Batch Import ===")
+    print(f"Run: {stats.get('run_id')}")
+    print(f"Manifest: {stats.get('manifest_path')}")
+    print(f"- Batches seen: {stats.get('batches_seen', 0)}")
+    print(f"- Batches imported: {stats.get('batches_imported', 0)}")
+    print(f"- Batches skipped: {stats.get('batches_skipped', 0)}")
+    print(f"- Imported items: {stats.get('imported_items', 0)}")
+    print(f"- Added: {stats.get('added_items', 0)}")
+    print(f"- Updated: {stats.get('updated_items', 0)}")
+    print(f"- Failed rows: {stats.get('failed_items', 0)}")
+    print(f"- Missing rows: {stats.get('missing_items', 0)}")
+    if stats.get("errors"):
+        print("\nWarnings/errors:")
+        for error in stats["errors"][:20]:
+            print(f"- {error}")
+        if len(stats["errors"]) > 20:
+            print(f"- ... {len(stats['errors']) - 20} more")
+
+
 def setup_zotero_environment():
     """Setup Zotero environment for CLI commands."""
     # Load standalone env first so global flags (e.g., ZOTERO_NO_CLAUDE) take effect
@@ -240,11 +335,30 @@ def _run_doctor():
         print(f"[INFO] Semantic index: not available ({type(exc).__name__}: {exc})")
 
 
+def _normalize_help_args(argv: list[str]) -> list[str]:
+    """Support `zotero-mcp help [command]` in addition to argparse's `--help`."""
+    if not argv or argv[0] != "help":
+        return argv
+    if len(argv) == 1:
+        return ["--help"]
+    return [*argv[1:], "--help"]
+
+
 def main():
     """Main entry point for the CLI."""
     from zotero_mcp._version import __version__
 
-    parser = argparse.ArgumentParser(description="Zotero Model Context Protocol server")
+    parser = argparse.ArgumentParser(
+        description="Zotero Model Context Protocol server",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "OpenAI Batch API indexing:\n"
+            "  zotero-mcp update-db --openai-batch     Submit embeddings asynchronously\n"
+            "  zotero-mcp openai-batch-status          Check submitted batch status\n"
+            "  zotero-mcp openai-batch-import          Import completed embeddings\n"
+            "  zotero-mcp help update-db               Show update-db options\n"
+        ),
+    )
     parser.add_argument("--version", action="version", version=f"zotero-mcp {__version__}")
 
     # Create subparsers for different commands
@@ -305,6 +419,35 @@ def main():
     )
     update_db_parser.add_argument("--config-path", help="Path to semantic search configuration file")
     update_db_parser.add_argument("--db-path", help="Path to Zotero database file (zotero.sqlite), overrides config")
+    openai_batch_group = update_db_parser.add_mutually_exclusive_group()
+    openai_batch_group.add_argument(
+        "--openai-batch",
+        dest="openai_batch",
+        action="store_true",
+        help="Submit OpenAI embeddings through the asynchronous Batch API",
+    )
+    openai_batch_group.add_argument(
+        "--no-openai-batch",
+        dest="openai_batch",
+        action="store_false",
+        help="Use realtime embeddings even if OpenAI Batch API is enabled in config",
+    )
+    update_db_parser.set_defaults(openai_batch=None)
+
+    # OpenAI batch lifecycle commands
+    batch_status_parser = subparsers.add_parser("openai-batch-status", help="Show OpenAI Batch API status")
+    batch_status_parser.add_argument(
+        "--batch-id", action="append", help="Specific OpenAI batch ID to inspect; can be repeated"
+    )
+    batch_status_parser.add_argument("--config-path", help="Path to semantic search configuration file")
+
+    batch_import_parser = subparsers.add_parser(
+        "openai-batch-import", help="Import completed OpenAI batch embeddings"
+    )
+    batch_import_parser.add_argument(
+        "--batch-id", action="append", help="Specific OpenAI batch ID to import; can be repeated"
+    )
+    batch_import_parser.add_argument("--config-path", help="Path to semantic search configuration file")
 
     # Database status command
     db_status_parser = subparsers.add_parser("db-status", help="Show semantic search database status")
@@ -356,7 +499,7 @@ def main():
         "--format", dest="export_format", default="bibtex", help="Export format (bibtex, ris, csljson, etc.)"
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(_normalize_help_args(sys.argv[1:]))
 
     # If no command is provided, default to 'serve'
     if not args.command:
@@ -460,10 +603,12 @@ def main():
                 print(f"  Database path: {collection_info.get('persist_directory', 'Unknown')}")
 
                 update_config = status.get("update_config", {})
+                batch_config = status.get("openai_batch", {})
                 print(f"  Auto update: {update_config.get('auto_update', False)}")
                 print(f"  Update frequency: {update_config.get('update_frequency', 'manual')}")
                 print(f"  Last update: {update_config.get('last_update', 'Never')}")
                 print(f"  Should update: {status.get('should_update', False)}")
+                print(f"  OpenAI Batch API: {'active' if batch_config.get('active') else 'inactive'}")
 
                 if collection_info.get("error"):
                     print(f"  Error: {collection_info['error']}")
@@ -616,11 +761,7 @@ def main():
         from zotero_mcp.semantic_search import create_semantic_search
 
         # Determine config path
-        config_path = args.config_path
-        if not config_path:
-            config_path = Path.home() / ".config" / "zotero-mcp" / "config.json"
-        else:
-            config_path = Path(config_path)
+        config_path = _semantic_config_path(args.config_path)
 
         print(f"Using configuration: {config_path}")
 
@@ -634,6 +775,9 @@ def main():
         try:
             # Create semantic search instance with optional db_path override
             search = create_semantic_search(str(config_path), db_path=db_path)
+            if args.openai_batch is True and search.chroma_client.embedding_model != "openai":
+                print("Error: --openai-batch requires ZOTERO_EMBEDDING_MODEL=openai", file=sys.stderr)
+                sys.exit(1)
 
             print("Starting database update...")
             if args.fulltext:
@@ -649,17 +793,13 @@ def main():
                     sys.exit(1)
                 print("Extracting full-text content from local Zotero database...")
             stats = search.update_database(
-                force_full_rebuild=args.force_rebuild, limit=args.limit, extract_fulltext=args.fulltext
+                force_full_rebuild=args.force_rebuild,
+                limit=args.limit,
+                extract_fulltext=args.fulltext,
+                use_openai_batch=args.openai_batch,
             )
 
-            print("\nDatabase update completed:")
-            print(f"- Total items: {stats.get('total_items', 0)}")
-            print(f"- Processed: {stats.get('processed_items', 0)}")
-            print(f"- Added: {stats.get('added_items', 0)}")
-            print(f"- Updated: {stats.get('updated_items', 0)}")
-            print(f"- Skipped: {stats.get('skipped_items', 0)}")
-            print(f"- Errors: {stats.get('errors', 0)}")
-            print(f"- Duration: {stats.get('duration', 'Unknown')}")
+            _print_update_stats(stats)
 
             if stats.get("error"):
                 print(f"Error: {stats['error']}")
@@ -667,6 +807,34 @@ def main():
 
         except Exception as e:
             print(f"Error updating database: {e}")
+            sys.exit(1)
+
+    elif args.command == "openai-batch-status":
+        setup_zotero_environment()
+
+        from zotero_mcp.semantic_search import create_semantic_search
+
+        config_path = _semantic_config_path(args.config_path)
+        try:
+            search = create_semantic_search(str(config_path))
+            status = search.get_openai_batch_status(batch_ids=args.batch_id)
+            _print_batch_status(status)
+        except Exception as e:
+            print(f"Error getting OpenAI batch status: {e}")
+            sys.exit(1)
+
+    elif args.command == "openai-batch-import":
+        setup_zotero_environment()
+
+        from zotero_mcp.semantic_search import create_semantic_search
+
+        config_path = _semantic_config_path(args.config_path)
+        try:
+            search = create_semantic_search(str(config_path))
+            stats = search.import_openai_batch(batch_ids=args.batch_id)
+            _print_batch_import(stats)
+        except Exception as e:
+            print(f"Error importing OpenAI batch: {e}")
             sys.exit(1)
 
     elif args.command == "db-status":
@@ -698,11 +866,13 @@ def main():
             print(f"Database path: {collection_info.get('persist_directory', 'Unknown')}")
 
             update_config = status.get("update_config", {})
+            batch_config = status.get("openai_batch", {})
             print("\nUpdate configuration:")
             print(f"- Auto update: {update_config.get('auto_update', False)}")
             print(f"- Frequency: {update_config.get('update_frequency', 'manual')}")
             print(f"- Last update: {update_config.get('last_update', 'Never')}")
             print(f"- Should update: {status.get('should_update', False)}")
+            print(f"- OpenAI Batch API: {'active' if batch_config.get('active') else 'inactive'}")
 
             if collection_info.get("error"):
                 print(f"\nError: {collection_info['error']}")
@@ -869,6 +1039,11 @@ def main():
         transport = getattr(args, "transport", "stdio")
         # Ensure environment is initialized (Claude config or standalone config)
         setup_zotero_environment()
+        # If the reranker is enabled, warm it up in the background so the first
+        # semantic search doesn't pay the ~tens-of-seconds model load inside the
+        # request path and time out (issue #283). Daemon thread: never blocks
+        # startup, never crashes the server if loading fails.
+        _warmup_reranker_in_background()
         if transport == "stdio":
             mcp.run(transport="stdio")
         elif transport == "streamable-http":

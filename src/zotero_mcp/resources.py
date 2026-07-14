@@ -1,7 +1,13 @@
-"""MCP Resources for Zotero library data.
+"""MCP resources: expose the Zotero library as attachable context.
 
 Resources expose read-only data that models can browse without tool calls,
 reducing token usage for common lookups.
+
+Importing this module registers each ``@mcp.resource`` with the FastMCP app (a
+side effect, mirroring the tool modules). The Zotero client is reached lazily
+via module-level attribute access (``_client.get_zotero_client()``) so tests can
+monkeypatch it, and every resource holds the shared API lock while talking to
+Zotero.
 """
 
 from fastmcp.exceptions import ResourceError

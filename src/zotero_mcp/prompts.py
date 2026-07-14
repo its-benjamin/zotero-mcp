@@ -2,6 +2,9 @@
 
 Prompts are reusable templates that guide AI assistants through
 multi-step research tasks using the available tools.
+
+Importing this module registers each ``@mcp.prompt`` with the FastMCP app (a
+side effect, mirroring the tool modules).
 """
 
 from fastmcp.prompts import Message
@@ -302,5 +305,66 @@ def export_for_latex(item_keys: str, style: str = "apa") -> list[Message]:
             "3. Verify that all required fields are present for each entry.\n"
             "4. Format the output as a valid .bib file.\n"
             "5. Report any items that had missing or incomplete metadata."
+        )
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Upstream-unique prompts (adapted to Message format)
+# ---------------------------------------------------------------------------
+
+
+@mcp.prompt(
+    name="zotero_synthesize_my_notes",
+    description="Synthesize your own highlights and notes across a topic or collection.",
+)
+def synthesize_my_notes(scope: str) -> list[Message]:
+    """Turn the user's annotations into a themed synthesis."""
+    return [
+        Message(
+            f"Synthesize my own reading notes and highlights for: **{scope}**.\n\n"
+            "1. Call `zotero_search_notes` (and `zotero_get_annotations` if available) "
+            f"scoped to '{scope}' when it names a collection or tag; otherwise filter library-wide.\n"
+            "2. Identify cross-cutting THEMES and TENSIONS across sources.\n"
+            "3. Produce a synthesis organized by theme, quoting highlights and attributing each to its paper.\n"
+            "4. End with the 3-5 most important takeaways and any gaps where you have no notes yet.\n\n"
+            "Use only actual annotations as evidence; do not invent claims."
+        )
+    ]
+
+
+@mcp.prompt(
+    name="zotero_find_contradicting_evidence",
+    description="Stress-test a claim by finding supporting and contradicting papers.",
+)
+def find_contradicting_evidence(claim: str) -> list[Message]:
+    """Search the library for evidence for and against *claim*."""
+    return [
+        Message(
+            f"Stress-test this claim against my Zotero library: **{claim}**\n\n"
+            "1. `zotero_semantic_search(query=<the claim>, limit=10)` — find papers directly on this topic.\n"
+            "2. `zotero_semantic_search` again with an INVERTED / skeptical phrasing of "
+            "the claim (e.g. limitations, null results, criticisms) to surface disconfirming work.\n"
+            "3. Sort results into SUPPORTS / CONTRADICTS / MIXED, quoting matched passages and citing item keys.\n"
+            "4. Weigh the evidence and state how well-supported the claim is overall.\n\n"
+            "Be even-handed — actively look for the strongest contradicting evidence."
+        )
+    ]
+
+
+@mcp.prompt(
+    name="zotero_expand_from_paper",
+    description="Snowball a reading list outward from one seed paper via its citation graph.",
+)
+def expand_from_paper(identifier: str) -> list[Message]:
+    """Grow a reading list outward from a seed paper."""
+    return [
+        Message(
+            f"Expand my reading list outward from this seed paper: **{identifier}**\n\n"
+            f"1. Look up the item (`zotero_get_item_metadata` / DOI search) for `{identifier}`.\n"
+            "2. Use related-paper tools if available, or semantic search on title/abstract themes.\n"
+            "3. Rank related papers by relevance; highlight ones not yet in the library.\n"
+            "4. For top not-in-library papers, offer to add them with `zotero_add_by_doi`.\n"
+            "5. Summarize how the seed paper sits in its neighborhood: foundations and follow-ups."
         )
     ]

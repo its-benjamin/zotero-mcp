@@ -40,12 +40,28 @@ class OpenAIEmbeddingFunction(EmbeddingFunction):
 
     max_input_tokens = 8000  # text-embedding-3-* limit is 8191
 
+    # Per-request input-list cap. OpenAI allows up to 2048 items but many
+    # OpenAI-compatible providers are stricter (SiliconFlow is 64 for
+    # /v1/embeddings, Mistral is 512, etc.). Defaulting to 64 keeps the code
+    # portable; real OpenAI users can raise embedding_config.request_batch_size.
+    DEFAULT_REQUEST_BATCH_SIZE = 64
+
     def __init__(
-        self, model_name: str = "text-embedding-3-small", api_key: str | None = None, base_url: str | None = None
+        self,
+        model_name: str = "text-embedding-3-small",
+        api_key: str | None = None,
+        base_url: str | None = None,
+        request_batch_size: int | None = None,
+        rate_limit_rps: float | None = None,
     ):
+        import threading
         self.model_name = model_name
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.base_url = base_url or os.getenv("OPENAI_BASE_URL")
+        self.request_batch_size = int(request_batch_size) if request_batch_size else self.DEFAULT_REQUEST_BATCH_SIZE
+        self.rate_limit_rps: float | None = float(rate_limit_rps) if rate_limit_rps else None
+        self._rate_lock = threading.Lock()
+        self._last_request_ts: float = 0.0
         if not self.api_key:
             raise ValueError("OpenAI API key is required")
 
@@ -64,7 +80,12 @@ class OpenAIEmbeddingFunction(EmbeddingFunction):
         return "openai"
 
     def get_config(self) -> dict[str, Any]:
-        return {"model_name": self.model_name, "base_url": self.base_url}
+        return {
+            "model_name": self.model_name,
+            "base_url": self.base_url,
+            "request_batch_size": self.request_batch_size,
+            "rate_limit_rps": self.rate_limit_rps,
+        }
 
     @staticmethod
     def build_from_config(config: dict[str, Any]) -> "OpenAIEmbeddingFunction":
@@ -72,12 +93,49 @@ class OpenAIEmbeddingFunction(EmbeddingFunction):
             model_name=config.get("model_name", "text-embedding-3-small"),
             api_key=config.get("api_key"),
             base_url=config.get("base_url"),
+            request_batch_size=config.get("request_batch_size"),
+            rate_limit_rps=config.get("rate_limit_rps"),
         )
 
+    def _wait_for_rate_limit(self) -> None:
+        """Sleep as needed so successive embedding requests stay under
+        ``rate_limit_rps``. Applied per HTTP request (including each sub-batch)
+        so rate-limited providers see a steady cadence regardless of how many
+        inputs the caller passed. The lock keeps parallel threads honest.
+        """
+        rps = self.rate_limit_rps
+        if not rps or rps <= 0:
+            return
+        import time
+        with self._rate_lock:
+            min_interval = 1.0 / rps
+            wait = min_interval - (time.monotonic() - self._last_request_ts)
+            if wait > 0:
+                time.sleep(wait)
+            self._last_request_ts = time.monotonic()
+
     def __call__(self, input: Documents) -> Embeddings:
-        """Generate embeddings using OpenAI API."""
-        response = self.client.embeddings.create(model=self.model_name, input=input)
-        return [data.embedding for data in response.data]
+        """Generate embeddings using the OpenAI-compatible API.
+
+        ``encoding_format="float"`` is set explicitly. The OpenAI SDK otherwise
+        negotiates base64 by default, which OpenRouter's Gemini embedding
+        providers (e.g. ``google/gemini-embedding-001``) do not return reliably —
+        the SDK then raises "No embedding data received" intermittently. Forcing
+        float makes every OpenAI-compatible backend, native OpenAI included,
+        respond deterministically.
+        """
+        batch_size = self.request_batch_size or self.DEFAULT_REQUEST_BATCH_SIZE
+        vecs: Embeddings = []
+        for i in range(0, len(input), batch_size):
+            sub = input[i : i + batch_size]
+            self._wait_for_rate_limit()
+            response = self.client.embeddings.create(
+                model=self.model_name,
+                input=sub,
+                encoding_format="float",
+            )
+            vecs.extend(data.embedding for data in response.data)
+        return vecs
 
     def embed_query(self, text: str) -> list[float]:
         """Embed a query string. No special handling needed for OpenAI."""
@@ -320,6 +378,80 @@ class HuggingFaceEmbeddingFunction(EmbeddingFunction):
         return text
 
 
+@register_embedding_function
+class OllamaEmbeddingFunction(EmbeddingFunction):
+    """Custom Ollama embedding function for ChromaDB.
+
+    Uses Ollama's local HTTP API. Registered under the name ``ollama`` so
+    ChromaDB can rebuild persisted collections that were created with this
+    embedding function.
+    """
+
+    # Ollama models vary; use a conservative, char-based fallback budget.
+    max_input_tokens = 8000
+
+    def __init__(self, model_name: str = "qwen3-embedding", base_url: str | None = None):
+        self.model_name = model_name
+        self.base_url = (base_url or os.getenv("OLLAMA_BASE_URL") or "http://localhost:11434").rstrip("/")
+
+    @staticmethod
+    def name() -> str:
+        return "ollama"
+
+    def get_config(self) -> dict[str, Any]:
+        return {"model_name": self.model_name, "base_url": self.base_url}
+
+    @staticmethod
+    def build_from_config(config: dict[str, Any]) -> "OllamaEmbeddingFunction":
+        return OllamaEmbeddingFunction(
+            model_name=config.get("model_name", "qwen3-embedding"),
+            base_url=config.get("base_url"),
+        )
+
+    def __call__(self, input: Documents) -> Embeddings:
+        """Generate embeddings using Ollama's /api/embed endpoint.
+
+        Unlike the deprecated /api/embeddings route (single ``prompt`` -> single
+        ``embedding``), /api/embed accepts a batch via ``input`` and returns a
+        list under ``embeddings``, so the whole batch is sent in one request
+        instead of one request per document.
+        """
+        try:
+            import requests
+        except ImportError:
+            raise ImportError("requests package is required for Ollama embeddings")
+
+        texts = list(input)
+        if not texts:
+            return []
+
+        endpoint = f"{self.base_url}/api/embed"
+        response = requests.post(
+            endpoint,
+            json={"model": self.model_name, "input": texts},
+            timeout=120,
+        )
+        response.raise_for_status()
+        data = response.json()
+        embeddings = data.get("embeddings")
+        if embeddings is None:
+            raise ValueError(
+                f"Ollama /api/embed returned no 'embeddings' field: {data}"
+            )
+        return embeddings
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a query string. No special handling needed for Ollama."""
+        return self.__call__([text])[0]
+
+    def truncate(self, text: str, max_tokens: int) -> str:
+        """Truncate using character-based estimation for local Ollama models."""
+        max_chars = max_tokens * 4
+        if len(text) > max_chars:
+            text = text[:max_chars]
+        return text
+
+
 class ChromaClient:
     """ChromaDB client for Zotero semantic search."""
 
@@ -336,7 +468,7 @@ class ChromaClient:
         Args:
             collection_name: Name of the ChromaDB collection
             persist_directory: Directory to persist the database
-            embedding_model: Model to use for embeddings ('default', 'openai', 'gemini', 'qwen', 'embeddinggemma', or HuggingFace model name)
+            embedding_model: Model to use for embeddings ('default', 'openai', 'gemini', 'ollama', 'qwen', 'embeddinggemma', or HuggingFace model name)
             embedding_config: Configuration for the embedding model
         """
         self.collection_name = collection_name
@@ -415,13 +547,22 @@ class ChromaClient:
             model_name = self.embedding_config.get("model_name", "text-embedding-3-small")
             api_key = self.embedding_config.get("api_key")
             base_url = self.embedding_config.get("base_url")
-            return OpenAIEmbeddingFunction(model_name=model_name, api_key=api_key, base_url=base_url)
+            return OpenAIEmbeddingFunction(
+                model_name=model_name, api_key=api_key, base_url=base_url,
+                request_batch_size=self.embedding_config.get("request_batch_size"),
+                rate_limit_rps=self.embedding_config.get("rate_limit_rps"),
+            )
 
         elif self.embedding_model == "gemini":
             model_name = self.embedding_config.get("model_name", "gemini-embedding-001")
             api_key = self.embedding_config.get("api_key")
             base_url = self.embedding_config.get("base_url")
             return GeminiEmbeddingFunction(model_name=model_name, api_key=api_key, base_url=base_url)
+
+        elif self.embedding_model == "ollama":
+            model_name = self.embedding_config.get("model_name", "qwen3-embedding")
+            base_url = self.embedding_config.get("base_url")
+            return OllamaEmbeddingFunction(model_name=model_name, base_url=base_url)
 
         elif self.embedding_model == "qwen":
             model_name = self.embedding_config.get("model_name", "Qwen/Qwen3-Embedding-0.6B")
@@ -431,7 +572,7 @@ class ChromaClient:
             model_name = self.embedding_config.get("model_name", "google/embeddinggemma-300m")
             return HuggingFaceEmbeddingFunction(model_name=model_name)
 
-        elif self.embedding_model not in ["default", "openai", "gemini"]:
+        elif self.embedding_model not in ["default", "openai", "gemini", "ollama"]:
             # Treat any other value as a HuggingFace model name
             return HuggingFaceEmbeddingFunction(model_name=self.embedding_model)
 
@@ -497,10 +638,47 @@ class ChromaClient:
             ids: List of unique IDs for each document
         """
         try:
-            self.collection.upsert(documents=documents, metadatas=metadatas, ids=ids)
+            # ChromaDB rejects batches larger than its max_batch_size
+            # (~5461). With passage-chunking enabled a batch of 25 books
+            # easily exceeds that, so split instead of failing.
+            try:
+                max_batch = int(self.client.get_max_batch_size())
+            except Exception:
+                max_batch = 5000
+            for i in range(0, len(ids), max_batch):
+                self.collection.upsert(
+                    documents=documents[i : i + max_batch],
+                    metadatas=metadatas[i : i + max_batch],
+                    ids=ids[i : i + max_batch],
+                )
             logger.info(f"Upserted {len(documents)} documents to ChromaDB collection")
         except Exception as e:
             logger.error(f"Error upserting documents to ChromaDB: {e}")
+            raise
+
+    def upsert_embeddings(
+        self,
+        documents: list[str],
+        metadatas: list[dict[str, Any]],
+        ids: list[str],
+        embeddings: list[list[float]],
+    ) -> None:
+        """
+        Upsert documents with precomputed embeddings.
+
+        Used by OpenAI Batch API imports so ChromaDB stores the vectors
+        returned asynchronously without calling the realtime embeddings API.
+        """
+        try:
+            self.collection.upsert(
+                documents=documents,
+                metadatas=metadatas,
+                ids=ids,
+                embeddings=embeddings,
+            )
+            logger.info(f"Upserted {len(documents)} precomputed embeddings to ChromaDB collection")
+        except Exception as e:
+            logger.error(f"Error upserting precomputed embeddings to ChromaDB: {e}")
             raise
 
     def search(
@@ -535,7 +713,7 @@ class ChromaClient:
             # its embed_query returns chunked results, not a single vector.
             _is_custom_ef = isinstance(
                 self.embedding_function,
-                (OpenAIEmbeddingFunction, GeminiEmbeddingFunction, HuggingFaceEmbeddingFunction),
+                (OpenAIEmbeddingFunction, GeminiEmbeddingFunction, HuggingFaceEmbeddingFunction, OllamaEmbeddingFunction),
             )
             if _is_custom_ef and hasattr(self.embedding_function, "embed_query") and query_texts:
                 query_embeddings = []
@@ -569,6 +747,20 @@ class ChromaClient:
         except Exception as e:
             logger.error(f"Error deleting documents from ChromaDB: {e}")
             raise
+
+    def delete_item_chunks(self, item_key: str) -> None:
+        """Delete all passage chunks belonging to one item (chunked collections).
+
+        Passage chunks carry ``parent_item_key`` in their metadata; deleting by
+        that key clears every ``<item_key>#<n>`` entry for the item before its
+        chunks are re-upserted, so a document that shrank to fewer passages
+        never leaves orphaned chunks behind. No-op-safe on item-level
+        collections (nothing matches the filter).
+        """
+        try:
+            self.collection.delete(where={"parent_item_key": item_key})
+        except Exception as e:
+            logger.debug(f"delete_item_chunks({item_key}) failed: {e}")
 
     def get_collection_info(self) -> dict[str, Any]:
         """Get information about the collection."""
@@ -612,16 +804,22 @@ class ChromaClient:
 
     def get_document_metadata(self, doc_id: str) -> dict[str, Any] | None:
         """
-        Get metadata for a document if it exists.
+        Get metadata for an item if it is indexed.
+
+        With passage chunking enabled, an item is stored only under its chunk
+        ids (``<key>#<n>``) and never under the bare item key, so an exact-id
+        lookup on the key alone misses every chunked item. Chunk 0 carries the
+        same item-level metadata (``date_modified``, ``has_fulltext``) that
+        callers need, so fall back to it.
 
         Args:
-            doc_id: Document ID to look up
+            doc_id: Item key (or full document id) to look up
 
         Returns:
-            Metadata dictionary if document exists, None otherwise
+            Metadata dictionary if the item is indexed, None otherwise
         """
         try:
-            result = self.collection.get(ids=[doc_id], include=["metadatas"])
+            result = self.collection.get(ids=[doc_id, f"{doc_id}#0"], include=["metadatas"])
             if result["ids"] and result["metadatas"]:
                 return result["metadatas"][0]
             return None
@@ -674,9 +872,20 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
         except Exception as e:
             logger.warning(f"Error loading config from {config_path}: {e}")
 
-    # Load configuration from environment variables
+    # Pick the embedding model. config.json is the richer, authoritative source
+    # (it also carries the matching api_key / base_url / model_name), so it wins
+    # over the ZOTERO_EMBEDDING_MODEL env var whenever it names a concrete model.
+    # The env var only fills the gap when config.json is absent or left at the
+    # "default" placeholder — which is the normal Claude Desktop case.
+    #
+    # This deliberately guards against a stale env value silently downgrading an
+    # explicitly configured provider: Claude Desktop passes its server `env`
+    # block on every launch and can rewrite that file on its own, so a leftover
+    # ZOTERO_EMBEDDING_MODEL=default there would otherwise override a Gemini/
+    # OpenAI config.json and break search with an opaque embedding-dimension
+    # mismatch against the persisted collection.
     env_embedding_model = os.getenv("ZOTERO_EMBEDDING_MODEL")
-    if env_embedding_model:
+    if env_embedding_model and config.get("embedding_model", "default") in (None, "default"):
         config["embedding_model"] = env_embedding_model
 
     # Merge embedding config from environment (config.json wins, env fills gaps).
@@ -714,8 +923,114 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
         if ec.get("api_key"):
             config["embedding_config"] = ec
 
+    elif config["embedding_model"] == "ollama":
+        ec = dict(config.get("embedding_config") or {})
+        if not ec.get("model_name"):
+            ec["model_name"] = os.getenv("OLLAMA_EMBEDDING_MODEL", "qwen3-embedding")
+        if not ec.get("base_url"):
+            env_base = os.getenv("OLLAMA_BASE_URL")
+            if env_base:
+                ec["base_url"] = env_base
+        config["embedding_config"] = ec
+
     return ChromaClient(
         collection_name=config["collection_name"],
         embedding_model=config["embedding_model"],
         embedding_config=config["embedding_config"],
     )
+
+
+class _NoEmbeddingFunction(EmbeddingFunction):
+    """Placeholder embedding function used for read-only status reads.
+
+    Passing an explicit embedding function to ``get_collection`` stops ChromaDB
+    from reconstructing the collection's persisted embedding function — which,
+    for the default backend, eagerly downloads the ~80MB ONNX MiniLM model.
+    Counting rows never embeds anything, so this is never actually called; it
+    raises if it ever is, to make misuse loud rather than silently wrong.
+
+    ``name()`` MUST return ``"default"``. ChromaDB >=1.x validates the supplied
+    embedding function against the collection's persisted config in
+    ``validate_embedding_function_conflict_on_get`` and raises a ``ValueError``
+    whenever the supplied ``name()`` differs from the persisted one — *unless*
+    the supplied name is ``"default"``, which short-circuits the check. Without
+    this, opening a collection that was built with any real backend (default,
+    openai, gemini, ...) raises a conflict; ``read_collection_status`` then
+    swallowed that error and reported "0 documents / not initialized" against a
+    fully populated database (issue #362).
+    """
+
+    def __init__(self):
+        pass
+
+    def __call__(self, input: Documents) -> Embeddings:  # pragma: no cover - never invoked
+        raise RuntimeError("embedding is unavailable in status-only mode")
+
+    @staticmethod
+    def name() -> str:
+        return "default"
+
+
+def read_collection_status(
+    config_path: str | None = None,
+    *,
+    persist_directory: str | None = None,
+) -> dict[str, Any]:
+    """Read ChromaDB collection stats WITHOUT loading an embedding model.
+
+    The full :class:`ChromaClient` constructor builds the embedding function,
+    which for the default backend downloads the ONNX MiniLM model on first use —
+    turning a read-only status check into a multi-minute (or network-blocked,
+    indefinite) hang. Reporting readiness only needs the row count and the
+    configured model name, neither of which requires the model itself. This
+    opens the persisted database directly and reads the count, mirroring the
+    shape returned by :meth:`ChromaClient.get_collection_info`.
+
+    ``persist_directory`` defaults to ``ChromaClient``'s location
+    (``~/.config/zotero-mcp/chroma_db``); it is parameterised for testing.
+    """
+    collection_name = "zotero_library"
+    embedding_model = "default"
+
+    if config_path and os.path.exists(config_path):
+        try:
+            with open(config_path) as f:
+                semantic_cfg = json.load(f).get("semantic_search", {})
+            collection_name = semantic_cfg.get("collection_name", collection_name)
+            embedding_model = semantic_cfg.get("embedding_model", embedding_model)
+        except Exception as e:
+            logger.warning(f"Error loading config from {config_path}: {e}")
+
+    # Mirror create_chroma_client's precedence: config.json wins; the env var
+    # only fills in when the file left the model at the "default" placeholder.
+    env_model = os.getenv("ZOTERO_EMBEDDING_MODEL")
+    if env_model and embedding_model in (None, "default"):
+        embedding_model = env_model
+
+    if persist_directory is None:
+        persist_directory = str(Path.home() / ".config" / "zotero-mcp" / "chroma_db")
+    base = {
+        "name": collection_name,
+        "embedding_model": embedding_model,
+        "persist_directory": persist_directory,
+    }
+
+    try:
+        with suppress_stdout():
+            client = chromadb.PersistentClient(
+                path=persist_directory,
+                settings=Settings(anonymized_telemetry=False, allow_reset=True),
+            )
+            try:
+                collection = client.get_collection(
+                    name=collection_name,
+                    embedding_function=_NoEmbeddingFunction(),
+                )
+            except Exception:
+                # Collection does not exist yet — database not initialized.
+                return {**base, "count": 0, "initialized": False}
+            count = collection.count()
+        return {**base, "count": count, "initialized": True}
+    except Exception as e:
+        logger.error(f"Error reading collection status: {e}")
+        return {**base, "count": 0, "error": str(e)}

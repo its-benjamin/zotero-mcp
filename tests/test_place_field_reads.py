@@ -88,6 +88,16 @@ class TestPlaceInMarkdown:
 
 
 class TestPlaceInBibtex:
+    @pytest.fixture(autouse=True)
+    def _force_fallback_bibtex(self, monkeypatch):
+        # generate_bibtex prefers Better BibTeX when Zotero is running; force the
+        # built-in fallback so these tests are deterministic regardless of whether
+        # a local Zotero instance is up (it is not on CI, but may be locally).
+        monkeypatch.setattr(
+            "zotero_mcp.better_bibtex_client.ZoteroBetterBibTexAPI.is_zotero_running",
+            lambda self: False,
+        )
+
     def test_address_rendered_for_book(self):
         item = _book(publisher="Oxford University Press", place="Oxford")
         output = generate_bibtex(item)

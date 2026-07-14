@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-07-13
+
+### Added
+- **Opt-in collection filter for the semantic search database** — set `semantic_search.collection_keys` in `config.json` to build the vector database from only those collections (subcollections included, resolved recursively) instead of the whole library. Unset, behavior is unchanged (#370).
+
+### Fixed
+- **Chunking no longer forces a full re-extract and re-embed of the whole library on every update.** With `semantic_search.chunking` enabled (#350), items are indexed only under their chunk ids (`<key>#<n>`), but the "already indexed?" check in the local-fulltext path looked each item up by its bare key. That exact-id lookup never matched, so every item counted as new: each fulltext update re-extracted every PDF and re-embedded the entire library, silently and without an error. `get_document_metadata` now falls back to chunk 0, which carries the item-level `date_modified` and `has_fulltext` that the check needs, so unchanged items are skipped again (#380).
+- **Local database auto-discovery now honors a custom Zotero data directory** — the `extensions.zotero.dataDir` preference is read from the Zotero profile's `prefs.js` (macOS/Windows/Linux), so relocated data directories no longer fail with "Zotero database not found at ~/Zotero/zotero.sqlite" (#68). The `ZOTERO_DB_PATH` environment variable, documented in the README but previously unimplemented, now works as an override, and the not-found error lists every location checked plus how to fix it. `extensions.zotero.baseAttachmentPath` is likewise read from the profile's `prefs.js`, fixing resolution of linked attachments relative to a base directory (#379).
+- **Items whose full-text extraction once failed are retried when their attachments change** — attaching a PDF later doesn't bump the parent's `dateModified`, so items first indexed metadata-only were permanently locked out of full-text indexing. The local-mode scan now records each item's attachment-key set and retries when it changes; legacy "failed" records retry once and converge (#373).
+- **ChromaDB upserts are split to the backend's max batch size** — with chunking enabled, a batch of long documents could exceed ChromaDB's `max_batch_size` (~5,461), failing the whole batch and degrading the retry pass to one-record-at-a-time upserts (#369).
+- **Created annotations land in the right place on PDFs with a non-zero page box origin** — highlight rectangles were written in PyMuPDF's CropBox-normalized space, but Zotero positions annotations in native PDF user space (MediaBox origin). Rects (and the derived sort index) are now mapped through the page's inverse transformation matrix, which also handles page rotation (#381).
+
+## [0.6.1] - 2026-07-03
+
+### Fixed
+- **`zotero_get_search_database_status` no longer reports "0 documents / not initialized" against a populated database** — ChromaDB ≥1.x's embedding-function conflict check rejected the status reader's no-op embedding function; it now identifies as `"default"`, which short-circuits the check for any persisted backend (#362, #364).
+- **Semantic search with the reranker enabled no longer times out** — the cross-encoder was reloaded from disk on every request (~30s per call); it is now cached process-wide and warmed up in the background at server start, so reranked searches are sub-second after the first load (#283, #365).
+- **Ollama embeddings now use the current `/api/embed` endpoint** instead of the deprecated `/api/embeddings` route. The whole batch is sent in a single request (`input`) rather than one request per document, and the response's `embeddings` list is parsed accordingly (#349, #360).
+
+## [0.6.0] - 2026-06-22
+
+### Added
+- **Passage-level chunking for semantic search** (opt-in via `semantic_search.chunking`) — each item is indexed as overlapping passages with char/page provenance, so search returns a grounded snippet and long PDFs stay searchable past the single-vector truncation limit. Off by default; enabling it needs a one-time `update-db --force-rebuild` (#350).
+- **Agentic research tools** (#350):
+  - `zotero_find_related_papers` — walks the OpenAlex citation graph (references + citing works) and flags each result as already-in-library or a gap.
+  - `zotero_library_coverage` — audits which items lack a PDF, with DOIs ready for the OA download cascade.
+  - `zotero_synthesize_annotations` — per-paper digest of highlights and notes.
+  - `zotero_export_bibliography` — CSL-rendered bibliography / citations / BibTeX via Zotero's own engine.
+- **MCP prompts and resources** — `literature_review`, `synthesize_my_notes`, `find_contradicting_evidence`, `expand_from_paper`; resources `zotero://collections`, `zotero://items/{key}`, `zotero://collections/{key}/items` (#350).
+- **`zotero_batch_update_extra`** — batch upsert/remove of `Key: value` lines in the Extra field across many items (#232, #334).
+- **Collection resolution in all add paths** — collection specs (key, name, or parent/child path) are resolved and validated across every add path and `manage_collections`; an unknown or ambiguous spec fails the add early with suggestions instead of leaving an unfiled item (#336, #340).
+- **Idempotent adds** — `if_exists=duplicate|file|skip`: re-adding converges (files into missing collections, adds missing tags) instead of duplicating. MCP default stays `duplicate`; the CLI defaults to `file` (#337, #341).
+- **`zotero-cli add isbn|bibtex|csl-json` subcommands**, with stdin via `-` (#338, #342).
+- **Ollama embedding backend** for semantic search (`nomic-embed-text`, `bge-m3`) (#349).
+- **OpenAI Batch API embedding indexing** — submit / status / import async embedding jobs for cheaper large-library indexing (#346).
+- **OpenAI embedding sub-batching and rate limiting** — `embedding_config.request_batch_size` (default 64, for stricter OpenAI-compatible providers) and an optional `embedding_config.rate_limit_rps` per-request throttle for 429 safety (#261, #307, #356).
+- **`citation_key` on `zotero_update_item`** — writes the native `citationKey` field (#320, #321).
+- **`ZOTERO_WEBDAV_TIMEOUT`** env var to tune the WebDAV upload read timeout (#344, #345).
+- Standalone PDF attachments now surface in `zotero_get_collection_items` (#224).
+
+### Fixed
+- Incremental semantic sync no longer advances the watermark when the immutable sqlite snapshot lags the live API (un-checkpointed WAL), which previously made newly-added items be skipped permanently (#292, #333).
+- `update-db --fulltext` no longer caps each item at a single truncated vector; passage chunking indexes full text past the embedding limit (#290).
+- `zotero-cli add file` no longer raises `TypeError` from a phantom `parent_key`; exposes `--title` / `--item-type` (#335, #339).
+- `zotero_read_pdf_pages` routes through the shared multi-source download (local → WebDAV → cloud), so WebDAV-backed PDFs work (#351).
+- Scite reaches the `/papers` endpoint correctly — it now sends a bare JSON array instead of a `{"dois": [...]}` object (which returned HTTP 400 and broke retraction checks), and matches Scite's lowercased DOI keys so uppercase DOIs (e.g. `10.1016/S0140-6736(97)11096-0`) aren't missed (#331).
+- Semantic search reliability: deterministic embeddings via explicit `encoding_format="float"` (fixes intermittent OpenRouter/Gemini "No embedding data received"); `db-status` no longer loads an embedding model or holds the global API lock (#348).
+
 ## [0.5.0] - 2026-06-08
 
 ### Added
