@@ -4,12 +4,12 @@ import json
 import os
 import re
 import tempfile
-import time
 from pathlib import Path
 from typing import Any
 
 from zotero_mcp import client as _client
 from zotero_mcp import utils as _utils
+from zotero_mcp.cache import TTLCache
 from zotero_mcp.rate_limiter import rate_limited_get
 
 # ---------------------------------------------------------------------------
@@ -18,10 +18,7 @@ from zotero_mcp.rate_limiter import rate_limited_get
 
 ZOTERO_MCP_CONFIG_PATH = Path.home() / ".config" / "zotero-mcp" / "config.json"
 
-# Cache for config file reads (TTL: 60 seconds)
-_config_cache: dict | None = None
-_config_cache_ts: float = 0.0
-_CONFIG_CACHE_TTL: float = 60.0
+_config_cache = TTLCache(ttl_seconds=60.0, max_size=1)
 
 
 def _load_zotero_mcp_config() -> dict:
@@ -32,27 +29,22 @@ def _load_zotero_mcp_config() -> dict:
 
     Results are cached for 60 seconds to avoid repeated file I/O and JSON parsing.
     """
-    global _config_cache, _config_cache_ts
-
-    now = time.monotonic()
-    if _config_cache is not None and (now - _config_cache_ts) < _CONFIG_CACHE_TTL:
-        return _config_cache
+    cached = _config_cache.get("config")
+    if cached is not None:
+        return cached
 
     if not ZOTERO_MCP_CONFIG_PATH.exists():
         result: dict = {}
-        _config_cache = result
-        _config_cache_ts = now
+        _config_cache.set("config", result)
         return result
     try:
         with open(ZOTERO_MCP_CONFIG_PATH, encoding="utf-8") as f:
             result = json.load(f) or {}
-            _config_cache = result
-            _config_cache_ts = now
+            _config_cache.set("config", result)
             return result
     except (json.JSONDecodeError, OSError):
         result = {}
-        _config_cache = result
-        _config_cache_ts = now
+        _config_cache.set("config", result)
         return result
 
 
@@ -300,19 +292,19 @@ def _normalize_tag_filter(value) -> list[str]:
     return []
 
 
+# Module-level cache for collection name resolution
+_collection_names_cache = TTLCache(ttl_seconds=60.0, max_size=1)
+
+
 async def _resolve_collection_names(zot, names, ctx=None):
     """Resolve collection names to keys (case-insensitive). Cached for 60s."""
     if not names:
         return []
-    from zotero_mcp.cache import TTLCache
 
-    if not hasattr(_resolve_collection_names, "_cache"):
-        _resolve_collection_names._cache = TTLCache(ttl_seconds=60.0, max_size=1)  # type: ignore[attr-defined]
-    cache = _resolve_collection_names._cache  # type: ignore[attr-defined]
-    all_collections = cache.get("all_collections")
+    all_collections = _collection_names_cache.get("all_collections")
     if all_collections is None:
         all_collections = _paginate(zot.collections)
-        cache.set("all_collections", all_collections or [])
+        _collection_names_cache.set("all_collections", all_collections or [])
     results = []
     for name in names:
         name_lower = name.lower()

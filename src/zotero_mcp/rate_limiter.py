@@ -30,9 +30,9 @@ DEFAULT_PROVIDER_LIMITS: dict[str, tuple[float, float]] = {
     "scite": (1, 1),
     "openai": (5, 1),
     "gemini": (1, 1),
-    # Voyage free-tier projects are limited to 3 RPM. Users on paid tiers can
-    # raise this with ZOTERO_MCP_RATE_VOYAGE_REQUESTS / WINDOW_SECONDS.
-    "voyage": (3, 60),
+    # Voyage Basic tier permits 2000 RPM for embedding models. Free-trial
+    # projects can set ZOTERO_MCP_RATE_VOYAGE_REQUESTS=3 and WINDOW_SECONDS=60.
+    "voyage": (2000, 60),
 }
 
 

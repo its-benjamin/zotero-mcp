@@ -8,6 +8,8 @@ for semantic search over Zotero libraries.
 import json
 import logging
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,12 @@ from zotero_mcp.utils import suppress_stdout
 
 logger = logging.getLogger(__name__)
 
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return default
 
 @register_embedding_function
 class OpenAIEmbeddingFunction(EmbeddingFunction):
@@ -317,6 +325,113 @@ class GeminiEmbeddingFunction(EmbeddingFunction):
 
 
 @register_embedding_function
+class VoyageEmbeddingFunction(EmbeddingFunction):
+    """Custom Voyage AI embedding function for ChromaDB."""
+
+    max_input_tokens = 8000
+
+    def __init__(
+        self,
+        model_name: str = "voyage-4-lite",
+        api_key: str | None = None,
+        base_url: str | None = None,
+        request_batch_size: int = 16,
+        tokens_per_minute: int | None = None,
+        output_dimension: int | None = 512,
+    ):
+        self.model_name = model_name
+        self.api_key = api_key or os.getenv("VOYAGE_API_KEY")
+        self.base_url = (base_url or os.getenv("VOYAGE_BASE_URL") or "https://api.voyageai.com/v1").rstrip("/")
+        self.request_batch_size = request_batch_size
+        self.tokens_per_minute = tokens_per_minute or _env_int("VOYAGE_TOKENS_PER_MINUTE", 10000)
+        self.output_dimension = output_dimension
+        self._token_lock = threading.Lock()
+        self._next_token_allowed = 0.0
+        if not self.api_key:
+            raise ValueError("Voyage API key is required")
+
+    @staticmethod
+    def name() -> str:
+        return "voyage"
+
+    def get_config(self) -> dict[str, Any]:
+        return {
+            "model_name": self.model_name,
+            "base_url": self.base_url,
+            "request_batch_size": self.request_batch_size,
+            "tokens_per_minute": self.tokens_per_minute,
+            "output_dimension": self.output_dimension,
+        }
+
+    @staticmethod
+    def build_from_config(config: dict[str, Any]) -> "VoyageEmbeddingFunction":
+        return VoyageEmbeddingFunction(
+            model_name=config.get("model_name", "voyage-4-lite"),
+            api_key=config.get("api_key"),
+            base_url=config.get("base_url"),
+            request_batch_size=config.get("request_batch_size", 16),
+            tokens_per_minute=config.get("tokens_per_minute"),
+            output_dimension=config.get("output_dimension", 512),
+        )
+
+    def _estimate_tokens(self, texts: list[str]) -> int:
+        return max(1, sum(max(1, len(text) // 4) for text in texts))
+
+    def _wait_for_token_budget(self, texts: list[str]) -> None:
+        if not self.tokens_per_minute or self.tokens_per_minute <= 0:
+            return
+        interval = 60.0 * self._estimate_tokens(texts) / self.tokens_per_minute
+        with self._token_lock:
+            now = time.monotonic()
+            if self._next_token_allowed > now:
+                time.sleep(self._next_token_allowed - now)
+                now = time.monotonic()
+            self._next_token_allowed = now + interval
+
+    def _embed(self, texts: list[str], input_type: str) -> list[list[float]]:
+        from zotero_mcp.rate_limiter import rate_limited_post
+
+        embeddings: list[list[float]] = []
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        for start in range(0, len(texts), self.request_batch_size):
+            batch = texts[start : start + self.request_batch_size]
+            self._wait_for_token_budget(batch)
+            payload: dict[str, Any] = {
+                "input": batch,
+                "model": self.model_name,
+                "input_type": input_type,
+            }
+            if self.output_dimension:
+                payload["output_dimension"] = self.output_dimension
+            response = rate_limited_post(
+                "voyage",
+                f"{self.base_url}/embeddings",
+                headers=headers,
+                json=payload,
+                timeout=60,
+                max_retries=5,
+            )
+            if response.status_code >= 400:
+                detail = response.text[:1000] if getattr(response, "text", None) else response.reason
+                raise RuntimeError(f"Voyage embeddings request failed ({response.status_code}): {detail}")
+            data = response.json()
+            embeddings.extend(item["embedding"] for item in data.get("data", []))
+        return embeddings
+
+    def __call__(self, input: Documents) -> Embeddings:
+        return self._embed(list(input), "document")
+
+    def embed_query(self, text: str) -> list[float]:
+        text = self.truncate(text, self.max_input_tokens)
+        return self._embed([text], "query")[0]
+
+    def truncate(self, text: str, max_tokens: int) -> str:
+        max_chars = max_tokens * 4
+        if len(text) > max_chars:
+            text = text[:max_chars]
+        return text
+
+@register_embedding_function
 class HuggingFaceEmbeddingFunction(EmbeddingFunction):
     """Custom HuggingFace embedding function for ChromaDB using sentence-transformers.
 
@@ -468,7 +583,7 @@ class ChromaClient:
         Args:
             collection_name: Name of the ChromaDB collection
             persist_directory: Directory to persist the database
-            embedding_model: Model to use for embeddings ('default', 'openai', 'gemini', 'ollama', 'qwen', 'embeddinggemma', or HuggingFace model name)
+            embedding_model: Model to use for embeddings ('default', 'openai', 'gemini', 'voyage', 'ollama', 'qwen', 'embeddinggemma', or HuggingFace model name)
             embedding_config: Configuration for the embedding model
         """
         self.collection_name = collection_name
@@ -559,6 +674,22 @@ class ChromaClient:
             base_url = self.embedding_config.get("base_url")
             return GeminiEmbeddingFunction(model_name=model_name, api_key=api_key, base_url=base_url)
 
+        elif self.embedding_model == "voyage":
+            model_name = self.embedding_config.get("model_name", "voyage-4-lite")
+            api_key = self.embedding_config.get("api_key")
+            base_url = self.embedding_config.get("base_url")
+            request_batch_size = self.embedding_config.get("request_batch_size", 16)
+            tokens_per_minute = self.embedding_config.get("tokens_per_minute")
+            output_dimension = self.embedding_config.get("output_dimension", 512)
+            return VoyageEmbeddingFunction(
+                model_name=model_name,
+                api_key=api_key,
+                base_url=base_url,
+                request_batch_size=request_batch_size,
+                tokens_per_minute=tokens_per_minute,
+                output_dimension=output_dimension,
+            )
+
         elif self.embedding_model == "ollama":
             model_name = self.embedding_config.get("model_name", "qwen3-embedding")
             base_url = self.embedding_config.get("base_url")
@@ -572,7 +703,7 @@ class ChromaClient:
             model_name = self.embedding_config.get("model_name", "google/embeddinggemma-300m")
             return HuggingFaceEmbeddingFunction(model_name=model_name)
 
-        elif self.embedding_model not in ["default", "openai", "gemini", "ollama"]:
+        elif self.embedding_model not in ["default", "openai", "gemini", "voyage", "ollama"]:
             # Treat any other value as a HuggingFace model name
             return HuggingFaceEmbeddingFunction(model_name=self.embedding_model)
 
@@ -713,7 +844,13 @@ class ChromaClient:
             # its embed_query returns chunked results, not a single vector.
             _is_custom_ef = isinstance(
                 self.embedding_function,
-                (OpenAIEmbeddingFunction, GeminiEmbeddingFunction, HuggingFaceEmbeddingFunction, OllamaEmbeddingFunction),
+                (
+                    OpenAIEmbeddingFunction,
+                    GeminiEmbeddingFunction,
+                    VoyageEmbeddingFunction,
+                    HuggingFaceEmbeddingFunction,
+                    OllamaEmbeddingFunction,
+                ),
             )
             if _is_custom_ef and hasattr(self.embedding_function, "embed_query") and query_texts:
                 query_embeddings = []
@@ -920,6 +1057,27 @@ def create_chroma_client(config_path: str | None = None) -> ChromaClient:
             env_base = os.getenv("GEMINI_BASE_URL")
             if env_base:
                 ec["base_url"] = env_base
+        if ec.get("api_key"):
+            config["embedding_config"] = ec
+
+    elif config["embedding_model"] == "voyage":
+        ec = dict(config.get("embedding_config") or {})
+        if not ec.get("api_key"):
+            env_key = os.getenv("VOYAGE_API_KEY")
+            if env_key:
+                ec["api_key"] = env_key
+        if not ec.get("model_name"):
+            ec["model_name"] = os.getenv("VOYAGE_EMBEDDING_MODEL", "voyage-4-lite")
+        if not ec.get("base_url"):
+            env_base = os.getenv("VOYAGE_BASE_URL")
+            if env_base:
+                ec["base_url"] = env_base
+        if not ec.get("request_batch_size"):
+            ec["request_batch_size"] = _env_int("VOYAGE_REQUEST_BATCH_SIZE", 16)
+        if not ec.get("tokens_per_minute"):
+            ec["tokens_per_minute"] = _env_int("VOYAGE_TOKENS_PER_MINUTE", 10000)
+        if not ec.get("output_dimension"):
+            ec["output_dimension"] = _env_int("VOYAGE_OUTPUT_DIMENSION", 512)
         if ec.get("api_key"):
             config["embedding_config"] = ec
 

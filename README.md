@@ -158,25 +158,25 @@ The base install is lightweight — it includes search, metadata retrieval, anno
 #### Installing from GitHub via uv (recommended)
 
 ```bash
-uv tool install git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6
+uv tool install git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3
 zotero-mcp setup  # Auto-configure (Claude Desktop supported)
 ```
 
 #### Installing from GitHub via pip
 
 ```bash
-pip install "zotero-mcp-server @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6"
+pip install "zotero-mcp-server @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3"
 zotero-mcp setup  # Auto-configure (Claude Desktop supported)
 ```
 
 #### Installing from GitHub via pipx
 
 ```bash
-pipx install git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6
+pipx install git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3
 zotero-mcp setup  # Auto-configure (Claude Desktop supported)
 ```
 
-> **Want the newest development build instead of the pinned release?** Replace `@v0.3.6` with `@main`. Use `@v0.3.6` for normal installs because it is the tested release tag.
+> **Want the newest development build instead of the pinned release?** Replace `@v0.6.3` with `@main`. Use `@v0.6.3` for normal installs because it is the tested release tag.
 
 ### Optional Extras
 
@@ -184,15 +184,15 @@ Heavy ML/PDF dependencies are separated into optional extras so the base install
 
 | Extra | What it adds | Install command |
 |-------|-------------|-----------------|
-| `semantic` | Semantic search via ChromaDB, sentence-transformers, OpenAI/Gemini/Voyage embeddings | `pip install "zotero-mcp-server[semantic] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6"` |
-| `pdf` | PDF outline extraction (PyMuPDF) and EPUB annotation support | `pip install "zotero-mcp-server[pdf] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6"` |
-| `pdf-llm` | Optional PyMuPDF4LLM Markdown extraction backend for LLM-readable PDF text (AGPL/commercial PyMuPDF licensing applies) | `pip install "zotero-mcp-server[pdf-llm] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6"` |
-| `scite` | [Scite](https://scite.ai) citation intelligence — tallies and retraction alerts (no account needed) | `pip install "zotero-mcp-server[scite] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6"` |
-| `all` | Everything above | `pip install "zotero-mcp-server[all] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6"` |
+| `semantic` | Semantic search via ChromaDB, sentence-transformers, OpenAI/Gemini/Voyage embeddings | `pip install "zotero-mcp-server[semantic] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3"` |
+| `pdf` | PDF outline extraction (PyMuPDF) and EPUB annotation support | `pip install "zotero-mcp-server[pdf] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3"` |
+| `pdf-llm` | Optional PyMuPDF4LLM Markdown extraction backend for LLM-readable PDF text (AGPL/commercial PyMuPDF licensing applies) | `pip install "zotero-mcp-server[pdf-llm] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3"` |
+| `scite` | [Scite](https://scite.ai) citation intelligence — tallies and retraction alerts (no account needed) | `pip install "zotero-mcp-server[scite] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3"` |
+| `all` | Everything above | `pip install "zotero-mcp-server[all] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3"` |
 
 For example, with uv:
 ```bash
-uv tool install "zotero-mcp-server[all] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.3.6"
+uv tool install "zotero-mcp-server[all] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3"
 ```
 
 If you only need basic library access (search, read, annotate, write), the default install with no extras is all you need.

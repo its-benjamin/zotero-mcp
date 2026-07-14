@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-07-14
+
+### Added
+- **Upstream sync**: merged [54yyyu/zotero-mcp](https://github.com/54yyyu/zotero-mcp) through **v0.6.2** (Ollama embeddings, OpenAI Batch API indexing, passage chunking, collection filter, local DB auto-discovery, idempotent adds, research/synthesis tools, and related fixes).
+- **Voyage embedding improvements**: token-budget throttling, configurable batch size / output dimension, and clearer wiring for Voyage 4 models.
+- **Zotero client caching**: reuse of local/remote pyzotero clients and children-cache lookups to cut repeated connection setup.
+- **CLI**: actionable error when the `[semantic]` extra is missing from the install.
+
+### Fixed
+- **`build-fts` on Windows**: open `zotero.sqlite` with `immutable=1` (not invalid `mode=immutable`).
+- **Voyage default rate limit**: align with Basic-tier RPM; free-trial users can still tighten via `ZOTERO_MCP_RATE_VOYAGE_*`.
+
+### Changed
+- README install pins and embedding docs cover Voyage, OpenRouter, Ollama, and HuggingFace together after the upstream merge.
+
 ## [0.6.2] - 2026-07-13
 
 ### Added

@@ -6,7 +6,7 @@ Python MCP server connecting Zotero to AI assistants. Single package at `src/zot
 
 - **Entry point**: `zotero-mcp serve` → `cli.py` → `server.py` → `_app.py` (FastMCP instance)
 - **Tool registration**: `tools/` directory, each module uses `@mcp.tool` decorator. Importing `tools/__init__.py` registers all tools via side-effect.
-- **Version**: `src/zotero_mcp/_version.py` (currently 0.5.0)
+- **Version**: `src/zotero_mcp/_version.py` (currently 0.6.3)
 
 ## Commands
 

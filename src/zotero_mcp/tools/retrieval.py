@@ -835,15 +835,18 @@ async def get_collections(limit: int | str | None = None, *, ctx: Context) -> st
 
         limit = _helpers._normalize_limit(limit, default=100, max_val=5000)
 
-        # Check collections cache
+        # Check collections cache - use single cache key for all collections
         coll_cache = get_collections_cache()
-        cache_key = f"collections:{limit}"
-        collections = coll_cache.get(cache_key)
-        if collections is None:
-            collections = await _client.run_zotero_call(
-                _helpers._paginate, zot.collections, max_items=limit, operation="paginate(zot.collections)"
+        cache_key = "collections:all"
+        all_collections = coll_cache.get(cache_key)
+        if all_collections is None:
+            all_collections = await _client.run_zotero_call(
+                _helpers._paginate, zot.collections, max_items=5000, operation="paginate(zot.collections)"
             )
-            coll_cache.set(cache_key, collections or [])
+            coll_cache.set(cache_key, all_collections or [])
+
+        # Apply limit after cache retrieval
+        collections = all_collections[:limit] if all_collections else []
 
         # Always return the header, even if empty
         output = ["# Zotero Collections", ""]

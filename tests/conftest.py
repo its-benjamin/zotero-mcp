@@ -15,18 +15,16 @@ def _clear_runtime_caches():
     from zotero_mcp.cache import invalidate_all_caches
     invalidate_all_caches()
 
-    # Helpers function cache
+    # Helpers collection names cache (now module-level TTLCache)
     from zotero_mcp.tools import _helpers as _helpers_mod
-    if hasattr(_helpers_mod._resolve_collection_names, "_cache"):
-        _helpers_mod._resolve_collection_names._cache.clear()
+    _helpers_mod._collection_names_cache.clear()
 
     yield
 
     # Post-test cleanup
     _search_mod._search_cache.clear()
     invalidate_all_caches()
-    if hasattr(_helpers_mod._resolve_collection_names, "_cache"):
-        _helpers_mod._resolve_collection_names._cache.clear()
+    _helpers_mod._collection_names_cache.clear()
 
 
 @pytest.fixture(autouse=True)

@@ -96,6 +96,23 @@ def apply_environment_variables(env_vars):
             os.environ[key] = str(value)
 
 
+def _semantic_extra_error(exc: ImportError) -> str:
+    return (
+        "Semantic search dependencies are not installed.\n"
+        "Install them with one of:\n"
+        "  uv tool install zotero-mcp-server[semantic] --force\n"
+        "  pip install 'zotero-mcp-server[semantic]'\n"
+        f"Original error: {exc}"
+    )
+
+def _import_create_semantic_search():
+    try:
+        from zotero_mcp.semantic_search import create_semantic_search
+    except ImportError as exc:
+        print(_semantic_extra_error(exc), file=sys.stderr)
+        sys.exit(1)
+    return create_semantic_search
+
 def _save_zotero_db_path_to_config(config_path: Path, db_path: str) -> None:
     """
     Save the Zotero database path to the configuration file.
@@ -587,7 +604,7 @@ def main():
         config_path = Path.home() / ".config" / "zotero-mcp" / "config.json"
         if config_path.exists():
             try:
-                from zotero_mcp.semantic_search import create_semantic_search
+                create_semantic_search = _import_create_semantic_search()
 
                 # Get database status (similar to db-status command)
                 search = create_semantic_search(str(config_path))
@@ -665,7 +682,7 @@ def main():
         import sqlite3
 
         try:
-            zotero_conn = sqlite3.connect(f"file:{db_path}?mode=immutable", uri=True)
+            zotero_conn = sqlite3.connect(f"file:{db_path}?immutable=1", uri=True)
             fts = get_fts_index()
             count = fts.populate_from_zotero_db(zotero_conn)
             zotero_conn.close()
@@ -758,7 +775,7 @@ def main():
         # Setup Zotero environment variables
         setup_zotero_environment()
 
-        from zotero_mcp.semantic_search import create_semantic_search
+        create_semantic_search = _import_create_semantic_search()
 
         # Determine config path
         config_path = _semantic_config_path(args.config_path)
@@ -841,7 +858,7 @@ def main():
         # Setup Zotero environment variables
         setup_zotero_environment()
 
-        from zotero_mcp.semantic_search import create_semantic_search
+        create_semantic_search = _import_create_semantic_search()
 
         # Determine config path
         config_path = args.config_path
@@ -887,7 +904,7 @@ def main():
 
         from collections import Counter
 
-        from zotero_mcp.semantic_search import create_semantic_search
+        create_semantic_search = _import_create_semantic_search()
 
         # Determine config path
         config_path = args.config_path

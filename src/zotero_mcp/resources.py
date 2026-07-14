@@ -15,6 +15,7 @@ from fastmcp.exceptions import ResourceError
 from zotero_mcp import client as _client
 from zotero_mcp import utils as _utils
 from zotero_mcp._app import mcp
+from zotero_mcp.cache import get_collections_cache, get_tags_cache
 from zotero_mcp.client import with_zotero_api_lock
 
 
@@ -40,7 +41,15 @@ async def collections_list() -> list[dict]:
     """All collections in the library with keys and names."""
     try:
         zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
-        collections = await _client.run_zotero_call(zot.collections, operation="zot.collections()")
+
+        # Check collections cache
+        coll_cache = get_collections_cache()
+        cache_key = "collections:all"
+        collections = coll_cache.get(cache_key)
+        if collections is None:
+            collections = await _client.run_zotero_call(zot.collections, operation="zot.collections()")
+            coll_cache.set(cache_key, collections or [])
+
         return [
             {
                 "key": c["key"],
@@ -59,7 +68,15 @@ async def tags_list() -> list[str]:
     """All tags used in the library."""
     try:
         zot = await _client.run_zotero_call(_client.get_zotero_client, operation="get_zotero_client")
-        tags = await _client.run_zotero_call(lambda: zot.everything(zot.tags()), operation="zot.tags()")
+
+        # Check tags cache
+        tags_cache = get_tags_cache()
+        cache_key = "tags:all"
+        tags = tags_cache.get(cache_key)
+        if tags is None:
+            tags = await _client.run_zotero_call(lambda: zot.everything(zot.tags()), operation="zot.tags()")
+            tags_cache.set(cache_key, tags or [])
+
         return sorted({t["tag"] for t in tags})
     except Exception as e:
         raise ResourceError(f"Could not fetch tags: {e}") from e

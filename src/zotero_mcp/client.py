@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from markitdown import MarkItDown
 from pyzotero import zotero
 
+from zotero_mcp.cache import get_children_cache
 from zotero_mcp.utils import format_creators
 from zotero_mcp.webdav import (
     WebDAVNotConfiguredError,
@@ -133,16 +134,38 @@ async def run_zotero_call(func, /, *args, timeout: float | None = None, operatio
 # in get_zotero_client(). Keys: "library_id", "library_type".
 _active_library_override: dict[str, str] = {}
 
+# Cached Zotero client instance — avoids creating new client on every call.
+# Invalidated when library override changes or explicitly cleared.
+_zotero_client_cache: zotero.Zotero | None = None
+_zotero_client_cache_key: str | None = None
+
+# Cached local Zotero client instance — avoids creating new client + testing connection on every call.
+_local_zotero_client_cache: zotero.Zotero | None = None
+
 
 def set_active_library(library_id: str, library_type: str) -> None:
     """Set runtime library override for all subsequent get_zotero_client() calls."""
+    global _zotero_client_cache, _zotero_client_cache_key
     _active_library_override["library_id"] = library_id
     _active_library_override["library_type"] = library_type
+    _zotero_client_cache = None
+    _zotero_client_cache_key = None
 
 
 def clear_active_library() -> None:
     """Clear runtime library override, reverting to environment variable defaults."""
+    global _zotero_client_cache, _zotero_client_cache_key
     _active_library_override.clear()
+    _zotero_client_cache = None
+    _zotero_client_cache_key = None
+
+
+def clear_zotero_client_cache() -> None:
+    """Clear the cached Zotero client instance."""
+    global _zotero_client_cache, _zotero_client_cache_key, _local_zotero_client_cache
+    _zotero_client_cache = None
+    _zotero_client_cache_key = None
+    _local_zotero_client_cache = None
 
 
 def get_active_library() -> dict[str, str]:
@@ -197,6 +220,8 @@ def get_zotero_client() -> zotero.Zotero:
     Raises:
         ValueError: If required environment variables are missing.
     """
+    global _zotero_client_cache, _zotero_client_cache_key
+
     # Runtime overrides take precedence over environment variables
     override = _active_library_override
     library_id = override.get("library_id") or os.getenv("ZOTERO_LIBRARY_ID")
@@ -215,13 +240,21 @@ def get_zotero_client() -> zotero.Zotero:
             "or use ZOTERO_LOCAL=true for local Zotero instance."
         )
 
-    return zotero.Zotero(
+    # Build cache key from client configuration
+    cache_key = f"{library_id}:{library_type}:{api_key}:{local}"
+    if _zotero_client_cache is not None and _zotero_client_cache_key == cache_key:
+        return _zotero_client_cache
+
+    client = zotero.Zotero(
         library_id=library_id,
         library_type=library_type,
         api_key=api_key,
         local=local,
         client=_make_local_http_client() if local else None,
     )
+    _zotero_client_cache = client
+    _zotero_client_cache_key = cache_key
+    return client
 
 
 def get_local_zotero_client() -> zotero.Zotero | None:
@@ -235,6 +268,9 @@ def get_local_zotero_client() -> zotero.Zotero | None:
     Returns:
         A local Zotero client instance, or None if local Zotero is not available.
     """
+    global _local_zotero_client_cache
+    if _local_zotero_client_cache is not None:
+        return _local_zotero_client_cache
     try:
         # Create a local client - library_id 0 is the default for local.
         # HTTP/1.1-only transport for compatibility with Zotero 8's local
@@ -248,6 +284,7 @@ def get_local_zotero_client() -> zotero.Zotero | None:
         )
         # Test connection by making a simple request
         client.items(limit=1)
+        _local_zotero_client_cache = client
         return client
     except Exception:
         return None
@@ -528,7 +565,13 @@ def get_attachment_details(zot: zotero.Zotero, item: dict[str, Any]) -> Attachme
 
     # For regular items, look for child attachments
     try:
-        children = zot.children(item_key)
+        # Check children cache first
+        children_cache = get_children_cache()
+        cache_key = f"children:{item_key}"
+        children = children_cache.get(cache_key)
+        if children is None:
+            children = zot.children(item_key)
+            children_cache.set(cache_key, children or [])
 
         # Group attachments by content type
         pdfs = []
