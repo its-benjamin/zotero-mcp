@@ -158,25 +158,25 @@ The base install is lightweight — it includes search, metadata retrieval, anno
 #### Installing from GitHub via uv (recommended)
 
 ```bash
-uv tool install git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3
+uv tool install git+https://github.com/its-benjamin/zotero-mcp.git@v0.7.0
 zotero-mcp setup  # Auto-configure (Claude Desktop supported)
 ```
 
 #### Installing from GitHub via pip
 
 ```bash
-pip install "zotero-mcp-server @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3"
+pip install "zotero-mcp-server @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.7.0"
 zotero-mcp setup  # Auto-configure (Claude Desktop supported)
 ```
 
 #### Installing from GitHub via pipx
 
 ```bash
-pipx install git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3
+pipx install git+https://github.com/its-benjamin/zotero-mcp.git@v0.7.0
 zotero-mcp setup  # Auto-configure (Claude Desktop supported)
 ```
 
-> **Want the newest development build instead of the pinned release?** Replace `@v0.6.3` with `@main`. Use `@v0.6.3` for normal installs because it is the tested release tag.
+> **Want the newest development build instead of the pinned release?** Replace `@v0.7.0` with `@main`. Use `@v0.7.0` for normal installs because it is the tested release tag.
 
 ### Optional Extras
 
@@ -184,15 +184,15 @@ Heavy ML/PDF dependencies are separated into optional extras so the base install
 
 | Extra | What it adds | Install command |
 |-------|-------------|-----------------|
-| `semantic` | Semantic search via ChromaDB, sentence-transformers, OpenAI/Gemini/Voyage embeddings | `pip install "zotero-mcp-server[semantic] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3"` |
-| `pdf` | PDF outline extraction (PyMuPDF) and EPUB annotation support | `pip install "zotero-mcp-server[pdf] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3"` |
-| `pdf-llm` | Optional PyMuPDF4LLM Markdown extraction backend for LLM-readable PDF text (AGPL/commercial PyMuPDF licensing applies) | `pip install "zotero-mcp-server[pdf-llm] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3"` |
-| `scite` | [Scite](https://scite.ai) citation intelligence — tallies and retraction alerts (no account needed) | `pip install "zotero-mcp-server[scite] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3"` |
-| `all` | Everything above | `pip install "zotero-mcp-server[all] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3"` |
+| `semantic` | Semantic search via ChromaDB, sentence-transformers, OpenAI/Gemini/Voyage embeddings | `pip install "zotero-mcp-server[semantic] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.7.0"` |
+| `pdf` | PDF outline extraction (PyMuPDF) and EPUB annotation support | `pip install "zotero-mcp-server[pdf] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.7.0"` |
+| `pdf-llm` | Optional PyMuPDF4LLM Markdown extraction backend for LLM-readable PDF text (AGPL/commercial PyMuPDF licensing applies) | `pip install "zotero-mcp-server[pdf-llm] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.7.0"` |
+| `scite` | [Scite](https://scite.ai) citation intelligence — tallies and retraction alerts (no account needed) | `pip install "zotero-mcp-server[scite] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.7.0"` |
+| `all` | Everything above | `pip install "zotero-mcp-server[all] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.7.0"` |
 
 For example, with uv:
 ```bash
-uv tool install "zotero-mcp-server[all] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.6.3"
+uv tool install "zotero-mcp-server[all] @ git+https://github.com/its-benjamin/zotero-mcp.git@v0.7.0"
 ```
 
 If you only need basic library access (search, read, annotate, write), the default install with no extras is all you need.
@@ -465,6 +465,13 @@ zotero-mcp setup --no-local --api-key YOUR_API_KEY --library-id YOUR_LIBRARY_ID
 ```
 
 ### Environment Variables
+
+**Tool loading (progressive disclosure):**
+- `ZOTERO_MCP_TOOL_MODE=meta` (**default**): List only 3 meta-tools (`zotero_search_tools`, `zotero_get_tool_schema`, `zotero_call_tool`). The host discovers the other 80+ tools on demand — much less context use. Recommended for Claude Desktop, Cursor, and other hosts that inject every tool schema into the prompt.
+- `ZOTERO_MCP_TOOL_MODE=core`: List ~13 high-use tools plus the 3 meta-tools; call the rest via `zotero_call_tool`.
+- `ZOTERO_MCP_TOOL_MODE=full`: Classic behaviour — list every tool (highest context cost).
+
+Workflow in `meta`/`core` mode: search tools → get schema → call tool. Example: *“Use zotero_search_tools for ‘add doi’, then call the match.”*
 
 **Zotero Connection:**
 - `ZOTERO_LOCAL=true`: Use the local Zotero API. When no mode is configured, `zotero-mcp` tries local Zotero first for reads and falls back to the web API only if web credentials are available.

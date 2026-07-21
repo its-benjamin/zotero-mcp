@@ -11,6 +11,7 @@ so that tests can patch the canonical location directly.
 
 # -- FastMCP app instance ---------------------------------------------------
 # -- Register every tool module by importing the package --------------------
+# tools/__init__.py also applies ZOTERO_MCP_TOOL_MODE progressive disclosure.
 import zotero_mcp.tools  # noqa: F401 — side-effect: registers all @mcp.tool
 from zotero_mcp._app import mcp  # noqa: F401 — re-export
 
@@ -25,6 +26,10 @@ from zotero_mcp.client import (  # noqa: F401
     get_web_zotero_client,
     get_zotero_client,
     set_active_library,
+)
+from zotero_mcp.tool_mode import (  # noqa: F401
+    apply_tool_mode,
+    get_tool_mode,
 )
 
 # -- Re-export private helpers (used by tests) ------------------------------
@@ -64,6 +69,11 @@ from zotero_mcp.tools.annotations import (  # noqa: F401
 from zotero_mcp.tools.connectors import (  # noqa: F401
     chatgpt_connector_search,
     connector_fetch,
+)
+from zotero_mcp.tools.meta_tools import (  # noqa: F401
+    call_tool,
+    get_tool_schema_tool,
+    search_tools,
 )
 from zotero_mcp.tools.read_pdf import (  # noqa: F401
     read_pdf_pages,

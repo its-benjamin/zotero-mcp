@@ -1,5 +1,12 @@
 """Shared test fixtures for Zotero MCP tests."""
 
+import os
+
+# Progressive tool mode defaults to "meta" in production. For unit tests we
+# want the classic full tool list unless a test explicitly re-applies a mode
+# (see tests/test_tool_mode.py). Must be set before zotero_mcp.tools is imported.
+os.environ.setdefault("ZOTERO_MCP_TOOL_MODE", "full")
+
 import pytest
 
 
@@ -9,14 +16,17 @@ def _clear_runtime_caches():
     aren't masked by stale cached results from earlier tests."""
     # Search result cache
     from zotero_mcp.tools import search as _search_mod
+
     _search_mod._search_cache.clear()
 
     # TTL caches
     from zotero_mcp.cache import invalidate_all_caches
+
     invalidate_all_caches()
 
     # Helpers collection names cache (now module-level TTLCache)
     from zotero_mcp.tools import _helpers as _helpers_mod
+
     _helpers_mod._collection_names_cache.clear()
 
     yield
@@ -32,12 +42,10 @@ def _mock_zotero_not_running(monkeypatch):
     """Ensure tests don't attempt to connect to a live local Zotero instance."""
     try:
         from zotero_mcp.better_bibtex_client import ZoteroBetterBibTexAPI
+
         monkeypatch.setattr(ZoteroBetterBibTexAPI, "is_zotero_running", lambda self: False)
     except ImportError:
         pass
-
-
-
 
 
 class DummyContext:

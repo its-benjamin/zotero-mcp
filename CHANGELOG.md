@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-21
+
+### Added
+- **Progressive tool disclosure (meta-tool pattern)** — hosts no longer need to inject ~80+ full tool schemas every turn. Three always-listed tools discover and invoke the rest:
+  - `zotero_search_tools` — keyword/pack catalog of the full tool set
+  - `zotero_get_tool_schema` — full input schema for one tool
+  - `zotero_call_tool` — run any tool by name (including tools hidden from `tools/list`)
+- **`ZOTERO_MCP_TOOL_MODE`** environment variable:
+  - `meta` (default) — list only the three meta-tools
+  - `core` — ~13 high-use tools plus meta-tools
+  - `full` — classic behaviour (list every tool)
+
+### Changed
+- **Breaking (default tool list):** with `ZOTERO_MCP_TOOL_MODE=meta`, only the progressive meta-tools appear in `tools/list`. Set `ZOTERO_MCP_TOOL_MODE=full` to restore the previous all-tools listing. Hidden tools remain registered and callable via `zotero_call_tool`.
+
 ## [0.6.3] - 2026-07-14
 
 ### Added
